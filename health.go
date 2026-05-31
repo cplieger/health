@@ -34,15 +34,15 @@ import (
 	"sync"
 )
 
-// HealthSignal is the interface satisfied by *Marker. Consumers (e.g.
+// Signal is the interface satisfied by *Marker. Consumers (e.g.
 // HTTP handlers) can depend on this interface without importing the
 // concrete type.
-type HealthSignal interface {
+type Signal interface {
 	Healthy() bool
 }
 
-// Compile-time assertion: *Marker satisfies HealthSignal.
-var _ HealthSignal = (*Marker)(nil)
+// Compile-time assertion: *Marker satisfies Signal.
+var _ Signal = (*Marker)(nil)
 
 // DefaultPath is the default marker location. Docker healthchecks
 // stat this path; the app creates and removes it at lifecycle points.
@@ -132,7 +132,7 @@ func (m *Marker) Cleanup() {
 }
 
 // Healthy reports whether the marker file currently exists. Satisfies
-// the HealthSignal interface so handlers can render /api/health without
+// the Signal interface so handlers can render /api/health without
 // reaching into a package global. Strict os.Stat: a degraded marker
 // directory (read-only mount, missing tmpfs) causes Healthy to return
 // false so the HTTP endpoint honestly reports unhealthy.

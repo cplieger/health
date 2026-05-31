@@ -27,8 +27,8 @@ func main() {
 
 ## API
 - `DefaultPath` — default marker path (`/tmp/.healthy`)
-- `HealthSignal` — interface with `Healthy() bool`
-- `Marker` — main type; implements `HealthSignal`
+- `Signal` — interface with `Healthy() bool`
+- `Marker` — main type; implements `Signal`
 - `NewMarker(path string) *Marker` — constructor (probes dir writability)
 - `(*Marker).Set(ok bool)` — touch or remove marker
 - `(*Marker).Cleanup()` — remove marker on shutdown

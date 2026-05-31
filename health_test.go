@@ -177,7 +177,7 @@ func TestProbeCheck_degraded(t *testing.T) {
 }
 
 // TestHealthMarker_Healthy covers the Healthy() method so consumers can
-// use *Marker via the HealthSignal interface. The method checks
+// use *Marker via the Signal interface. The method checks
 // marker-file presence via strict os.Stat.
 func TestHealthMarker_Healthy(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".healthy")
