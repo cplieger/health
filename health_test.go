@@ -1,8 +1,11 @@
 package health
 
 import (
+	"bytes"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"pgregory.net/rapid"
@@ -205,6 +208,36 @@ func TestHealthMarker_Healthy(t *testing.T) {
 	}
 }
 
+// TestWithLogger verifies that WithLogger injects a custom logger
+// and that log output goes through it.
+func TestWithLogger(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+
+	path := filepath.Join(t.TempDir(), ".healthy")
+	m := NewMarker(path, WithLogger(logger))
+
+	m.Set(true)
+	m.Set(false)
+
+	if buf.Len() == 0 {
+		t.Fatal("expected log output through custom logger, got none")
+	}
+	if !bytes.Contains(buf.Bytes(), []byte("health state changed")) {
+		t.Errorf("log output missing expected message, got: %s", buf.String())
+	}
+}
+
+// TestWithLogger_Nil verifies that WithLogger(nil) does not panic and
+// falls back to slog.Default().
+func TestWithLogger_Nil(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".healthy")
+	m := NewMarker(path, WithLogger(nil))
+	m.Set(true)
+	m.Set(false)
+	m.Cleanup()
+}
+
 // TestHealthMarker_HealthyDegraded verifies that in degraded mode
 // Healthy reports false (strict os.Stat semantics).
 func TestHealthMarker_HealthyDegraded(t *testing.T) {
@@ -223,4 +256,29 @@ func TestHealthMarker_HealthyDegraded(t *testing.T) {
 	if m.Healthy() {
 		t.Error("Healthy() = true in degraded mode, want false (strict os.Stat)")
 	}
+}
+
+// TestHealthMarker_ConcurrentSetCleanupHealthy exercises concurrent
+// Set, Cleanup, and Healthy calls under the race detector.
+func TestHealthMarker_ConcurrentSetCleanupHealthy(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".healthy")
+	m := NewMarker(path)
+
+	var wg sync.WaitGroup
+	for i := range 100 {
+		wg.Add(3)
+		go func() {
+			defer wg.Done()
+			m.Set(i%2 == 0)
+		}()
+		go func() {
+			defer wg.Done()
+			m.Cleanup()
+		}()
+		go func() {
+			defer wg.Done()
+			_ = m.Healthy()
+		}()
+	}
+	wg.Wait()
 }
