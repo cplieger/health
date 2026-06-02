@@ -25,7 +25,10 @@ func FuzzHandlerSignal(f *testing.F) {
 			target = "/"
 		}
 		h := Handler(stubSignal{healthy: healthy})
-		req := httptest.NewRequest(method, target, nil)
+		req, err := http.NewRequest(method, target, nil)
+		if err != nil {
+			t.Skip() // invalid method/target can't construct a request; not a handler concern
+		}
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
 
