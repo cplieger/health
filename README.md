@@ -55,11 +55,13 @@ http.Handle("/healthz", health.Handler(m))
 ```
 
 Response (200 OK):
+
 ```json
 {"status":"OK","timestamp":"2025-01-01T00:00:00Z"}
 ```
 
 Response (503 Service Unavailable):
+
 ```json
 {"status":"Unavailable","timestamp":"2025-01-01T00:00:00Z"}
 ```
