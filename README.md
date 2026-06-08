@@ -77,10 +77,7 @@ Response (503 Service Unavailable):
 - `Handler(s Signal) http.Handler` — optional JSON health endpoint
 - `RunProbe(path string)` — probe process entry (calls os.Exit)
 - `ProbeCheck(path string) int` — testable probe logic (0=healthy, 1=unhealthy)
-
-### Options
-
-- `WithLogger(l *slog.Logger)` — inject a structured logger (defaults to `slog.Default()`)
+- `ProbeDir(path string) error` — reports whether the marker's parent directory is writable (the degraded-mode check NewMarker/ProbeCheck use internally, exported for consumers and their tests)
 
 ## Unsupported by design
 

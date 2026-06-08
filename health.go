@@ -21,6 +21,9 @@ package health
 //     logged at Warn but do not change the marker's mode. They surface
 //     at the next probe interval as an unhealthy signal.
 //
+// Logging goes through slog.Default(); configure it via slog.SetDefault
+// in main before constructing a Marker.
+//
 // Thread-safe; Set may be called from any goroutine.
 
 import (
@@ -40,19 +43,6 @@ type Signal interface {
 	Healthy() bool
 }
 
-// Option configures a Marker. Pass options to NewMarker.
-type Option func(*Marker)
-
-// WithLogger injects a structured logger. If not provided, slog.Default() is used.
-// A nil logger is treated as slog.Default().
-func WithLogger(l *slog.Logger) Option {
-	return func(m *Marker) {
-		if l != nil {
-			m.logger = l
-		}
-	}
-}
-
 // Compile-time assertion: *Marker satisfies Signal.
 var _ Signal = (*Marker)(nil)
 
@@ -67,7 +57,6 @@ const DefaultPath = "/tmp/.healthy"
 // defer Cleanup on shutdown; call RunProbe from main when os.Args[1] is
 // "health".
 type Marker struct {
-	logger   *slog.Logger
 	path     string
 	mu       sync.Mutex
 	known    bool // true once Set has been called at least once
@@ -79,14 +68,11 @@ type Marker struct {
 // directory for writability. On failure it logs a single Warn with a
 // fix hint and returns a marker in degraded mode; callers need not
 // branch on the result.
-func NewMarker(path string, opts ...Option) *Marker {
-	m := &Marker{path: path, logger: slog.Default()}
-	for _, o := range opts {
-		o(m)
-	}
+func NewMarker(path string) *Marker {
+	m := &Marker{path: path}
 	if err := probeHealthDir(path); err != nil {
 		m.degraded = true
-		m.logger.Warn("health marker directory not writable, "+
+		slog.Warn("health marker directory not writable, "+
 			"container will report healthy in degraded mode",
 			"dir", filepath.Dir(path),
 			"error", err,
@@ -113,23 +99,23 @@ func (m *Marker) Set(ok bool) {
 
 	if ok {
 		if err := writeMarker(m.path); err != nil {
-			m.logger.Warn("failed to create health marker",
+			slog.Warn("failed to create health marker",
 				"path", m.path, "error", err)
 			return
 		}
 		if changed {
-			m.logger.Info("health state changed", "healthy", true)
+			slog.Info("health state changed", "healthy", true)
 		}
 		return
 	}
 
 	if err := os.Remove(m.path); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		m.logger.Warn("failed to remove health marker",
+		slog.Warn("failed to remove health marker",
 			"path", m.path, "error", err)
 		return
 	}
 	if changed {
-		m.logger.Warn("health state changed", "healthy", false)
+		slog.Warn("health state changed", "healthy", false)
 	}
 }
 
@@ -142,7 +128,7 @@ func (m *Marker) Cleanup() {
 		return
 	}
 	if err := os.Remove(m.path); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		m.logger.Warn("failed to remove health marker on cleanup",
+		slog.Warn("failed to remove health marker on cleanup",
 			"path", m.path, "error", err)
 	}
 }
@@ -186,6 +172,16 @@ func ProbeCheck(path string) int {
 		return 0
 	}
 	return 1
+}
+
+// ProbeDir reports whether the marker's parent directory is writable by
+// creating and deleting a temp file: nil when writable, the underlying
+// error otherwise. This is the exact check NewMarker and ProbeCheck use
+// internally to decide degraded mode; it is exported so consumers (and
+// their tests) can assert marker-directory writability without copying
+// the probe into their own package.
+func ProbeDir(path string) error {
+	return probeHealthDir(path)
 }
 
 // --- helpers ---
