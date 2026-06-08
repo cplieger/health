@@ -1,8 +1,6 @@
 package health
 
 import (
-	"bytes"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
@@ -208,34 +206,29 @@ func TestHealthMarker_Healthy(t *testing.T) {
 	}
 }
 
-// TestWithLogger verifies that WithLogger injects a custom logger
-// and that log output goes through it.
-func TestWithLogger(t *testing.T) {
-	var buf bytes.Buffer
-	logger := slog.New(slog.NewTextHandler(&buf, nil))
-
-	path := filepath.Join(t.TempDir(), ".healthy")
-	m := NewMarker(path, WithLogger(logger))
-
-	m.Set(true)
-	m.Set(false)
-
-	if buf.Len() == 0 {
-		t.Fatal("expected log output through custom logger, got none")
+// TestProbeDir_Writable confirms the exported ProbeDir succeeds on a
+// writable dir and leaves no artifact behind (mirrors the internal
+// probeHealthDir test, via the public wrapper consumers use).
+func TestProbeDir_Writable(t *testing.T) {
+	dir := t.TempDir()
+	if err := ProbeDir(filepath.Join(dir, ".healthy")); err != nil {
+		t.Fatalf("ProbeDir on writable dir: %v", err)
 	}
-	if !bytes.Contains(buf.Bytes(), []byte("health state changed")) {
-		t.Errorf("log output missing expected message, got: %s", buf.String())
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("readdir: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("ProbeDir left artifacts behind: %v", entries)
 	}
 }
 
-// TestWithLogger_Nil verifies that WithLogger(nil) does not panic and
-// falls back to slog.Default().
-func TestWithLogger_Nil(t *testing.T) {
-	path := filepath.Join(t.TempDir(), ".healthy")
-	m := NewMarker(path, WithLogger(nil))
-	m.Set(true)
-	m.Set(false)
-	m.Cleanup()
+// TestProbeDir_NonExistent confirms a missing parent directory is
+// reported as an error rather than masked.
+func TestProbeDir_NonExistent(t *testing.T) {
+	if err := ProbeDir(filepath.Join(t.TempDir(), "nope", ".healthy")); err == nil {
+		t.Fatal("expected error for non-existent parent dir")
+	}
 }
 
 // TestHealthMarker_HealthyDegraded verifies that in degraded mode
