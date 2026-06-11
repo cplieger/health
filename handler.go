@@ -26,6 +26,14 @@ type Status struct {
 //
 // The handler is optional — import and wire it only if your container
 // exposes an HTTP endpoint alongside the file-marker probe.
+//
+// Note: in degraded mode (unwritable marker directory) Marker.Healthy()
+// returns false, so this endpoint reports 503 -- intentionally diverging
+// from the `health` subcommand probe (ProbeCheck), which reports healthy
+// to avoid a Docker restart loop (see package doc). Do not wire this
+// endpoint as the sole liveness probe on a service that may run with a
+// read-only filesystem and no /tmp tmpfs, or it will restart-loop a
+// container that is actually alive.
 func Handler(s Signal) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		st := Status{Timestamp: time.Now().UTC().Format(time.RFC3339)}
