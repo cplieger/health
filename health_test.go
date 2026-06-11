@@ -1,8 +1,13 @@
 package health
 
 import (
+	"bytes"
+	"errors"
+	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -274,4 +279,211 @@ func TestHealthMarker_ConcurrentSetCleanupHealthy(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+func TestHealthMarker_SetWriteFailure(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".healthy")
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatalf("mkdir marker-as-dir: %v", err)
+	}
+
+	m := NewMarker(path)
+	if m.degraded {
+		t.Skip("parent dir not writable in this environment; skipping")
+	}
+
+	m.Set(true) // must not panic when os.Create fails
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat(%q) after failed Set(true): %v", path, err)
+	}
+	if !info.IsDir() {
+		t.Errorf("Set(true) on unwritable marker path created a file; want path unchanged (dir)")
+	}
+}
+
+func TestHealthMarker_SetRemoveFailure(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".healthy")
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatalf("mkdir marker-as-dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(path, "child"), nil, 0o600); err != nil {
+		t.Fatalf("write child: %v", err)
+	}
+
+	m := NewMarker(path)
+	if m.degraded {
+		t.Skip("parent dir not writable in this environment; skipping")
+	}
+
+	m.Set(false) // must not panic when os.Remove fails with non-ErrNotExist
+
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("path should still exist after failed Set(false) removal: %v", err)
+	}
+}
+
+// TestHealthMarker_SetWriteFailureWarnDedupAndRecovery verifies the
+// failure-gating contract: under a persistent write failure Set emits
+// exactly one Warn (not one per call), and once the write finally
+// succeeds it logs a recovery "health state changed" Info even though
+// the requested value never changed.
+func TestHealthMarker_SetWriteFailureWarnDedupAndRecovery(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".healthy")
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatalf("mkdir marker-as-dir: %v", err)
+	}
+
+	m := NewMarker(path)
+	if m.degraded {
+		t.Skip("parent dir not writable in this environment; skipping")
+	}
+
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	// Three failing calls (marker path is a directory -> os.Create fails).
+	m.Set(true)
+	m.Set(true)
+	m.Set(true)
+
+	if got := strings.Count(buf.String(), "failed to create health marker"); got != 1 {
+		t.Errorf("want exactly 1 write-failure Warn under persistent failure, got %d\nlog:\n%s", got, buf.String())
+	}
+
+	// Remove the blocking directory so the write can succeed, then recover.
+	if err := os.Remove(path); err != nil {
+		t.Fatalf("remove blocking dir: %v", err)
+	}
+	buf.Reset()
+	m.Set(true)
+
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("marker should exist after recovery Set(true): %v", err)
+	}
+	if !strings.Contains(buf.String(), "health state changed") {
+		t.Errorf("want recovery 'health state changed' Info after write succeeds; log:\n%s", buf.String())
+	}
+}
+
+// TestHealthMarker_SetRemoveFailureWarnDedup verifies the remove path
+// emits exactly one Warn under a persistent remove failure.
+func TestHealthMarker_SetRemoveFailureWarnDedup(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".healthy")
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatalf("mkdir marker-as-dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(path, "child"), nil, 0o600); err != nil {
+		t.Fatalf("write child: %v", err)
+	}
+
+	m := NewMarker(path)
+	if m.degraded {
+		t.Skip("parent dir not writable in this environment; skipping")
+	}
+
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	// Non-empty directory -> os.Remove fails with non-ErrNotExist.
+	m.Set(false)
+	m.Set(false)
+	m.Set(false)
+
+	if got := strings.Count(buf.String(), "failed to remove health marker"); got != 1 {
+		t.Errorf("want exactly 1 remove-failure Warn under persistent failure, got %d\nlog:\n%s", got, buf.String())
+	}
+}
+
+func TestHealthMarker_CleanupRemoveFailure(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".healthy")
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatalf("mkdir marker-as-dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(path, "child"), nil, 0o600); err != nil {
+		t.Fatalf("write child: %v", err)
+	}
+
+	m := NewMarker(path)
+	if m.degraded {
+		t.Skip("parent dir not writable in this environment; skipping")
+	}
+
+	m.Cleanup() // must not panic when os.Remove fails with non-ErrNotExist
+
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("path should still exist after failed Cleanup removal: %v", err)
+	}
+}
+
+func TestRunProbe_exits(t *testing.T) {
+	if os.Getenv("HEALTH_RUNPROBE_CASE") != "" {
+		RunProbe(os.Getenv("HEALTH_RUNPROBE_PATH"))
+		return
+	}
+
+	okPath := filepath.Join(t.TempDir(), ".healthy")
+	if err := os.WriteFile(okPath, nil, 0o600); err != nil {
+		t.Fatalf("write marker: %v", err)
+	}
+	badPath := filepath.Join(t.TempDir(), ".healthy")
+
+	tests := []struct {
+		name     string
+		path     string
+		wantExit int
+	}{
+		{"marker_present_exits_0", okPath, 0},
+		{"marker_absent_writable_dir_exits_1", badPath, 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := exec.Command(os.Args[0], "-test.run=TestRunProbe_exits")
+			cmd.Env = append(os.Environ(),
+				"HEALTH_RUNPROBE_CASE=1",
+				"HEALTH_RUNPROBE_PATH="+tt.path)
+			err := cmd.Run()
+
+			if tt.wantExit == 0 {
+				if err != nil {
+					t.Errorf("RunProbe(%q) exited non-zero: %v", tt.path, err)
+				}
+				return
+			}
+			var ee *exec.ExitError
+			if !errors.As(err, &ee) {
+				t.Fatalf("RunProbe(%q): expected *exec.ExitError, got %v", tt.path, err)
+			}
+			if ee.ExitCode() != tt.wantExit {
+				t.Errorf("RunProbe(%q) exit = %d, want %d", tt.path, ee.ExitCode(), tt.wantExit)
+			}
+		})
+	}
+}
+
+// TestHealthMarker_Healthy_nilReceiver pins the documented nil-receiver
+// contract: a nil *Marker reports unhealthy rather than panicking, both
+// directly and when handed through the Signal interface (a non-nil
+// interface wrapping a nil pointer).
+func TestHealthMarker_Healthy_nilReceiver(t *testing.T) {
+	var m *Marker
+
+	if m.Healthy() {
+		t.Error("(*Marker)(nil).Healthy() = true, want false")
+	}
+
+	var s Signal = m
+	if s.Healthy() {
+		t.Error("Signal backed by nil *Marker: Healthy() = true, want false")
+	}
 }

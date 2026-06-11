@@ -66,12 +66,19 @@ Response (503 Service Unavailable):
 {"status":"Unavailable","timestamp":"2025-01-01T00:00:00Z"}
 ```
 
+> **Degraded mode caveat:** when the marker directory is unwritable (e.g.
+> `read_only: true` with no `/tmp` tmpfs), `Handler` reports 503, intentionally
+> diverging from the `health` subcommand probe (`ProbeCheck`), which reports
+> healthy to avoid a Docker restart loop. Do not wire `Handler` as the _sole_
+> liveness probe on a service that may run read-only without a `/tmp` tmpfs, or
+> it will restart-loop a container that is actually alive.
+
 ## API
 
 - `DefaultPath` — default marker path (`/tmp/.healthy`)
 - `Signal` — interface with `Healthy() bool`
 - `Marker` — main type; implements `Signal`
-- `NewMarker(path string, opts ...Option) *Marker` — constructor (probes dir writability)
+- `NewMarker(path string) *Marker` — constructor (probes dir writability)
 - `(*Marker).Set(ok bool)` — touch or remove marker
 - `(*Marker).Cleanup()` — remove marker on shutdown
 - `(*Marker).Healthy() bool` — stat-based liveness check
