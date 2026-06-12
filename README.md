@@ -4,7 +4,6 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/cplieger/health.svg)](https://pkg.go.dev/github.com/cplieger/health)
 [![Go Report Card](https://goreportcard.com/badge/github.com/cplieger/health)](https://goreportcard.com/report/github.com/cplieger/health)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/cplieger/health/badge)](https://scorecard.dev/viewer/?uri=github.com/cplieger/health)
-[![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
 
 > File-based healthcheck for distroless containers
 
