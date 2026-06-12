@@ -112,8 +112,8 @@ The whole surface is small enough to enumerate; keep it that way.
 
 ## Local development
 
-The module targets the Go version pinned in `go.mod` (currently
-`go 1.26.4`). Use that toolchain or newer.
+The module targets the Go version pinned in `go.mod`. Use that
+toolchain or newer.
 
 ```sh
 go build ./...
@@ -148,7 +148,7 @@ call sites.
 
 ### Fuzzing
 
-Two fuzz targets live in `fuzz_test.go`. Run one at a time with a time
+Fuzz targets live in `fuzz_test.go`. Run one at a time with a time
 budget:
 
 ```sh
