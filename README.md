@@ -1,11 +1,12 @@
 # health
 
-[![CI](https://github.com/cplieger/health/actions/workflows/ci.yaml/badge.svg)](https://github.com/cplieger/health/actions/workflows/ci.yaml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/cplieger/health.svg)](https://pkg.go.dev/github.com/cplieger/health)
+[![Go version](https://img.shields.io/github/go-mod/go-version/cplieger/health)](https://github.com/cplieger/health/blob/main/go.mod)
 [![Go Report Card](https://goreportcard.com/badge/github.com/cplieger/health)](https://goreportcard.com/report/github.com/cplieger/health)
-[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/cplieger/health/badge)](https://scorecard.dev/viewer/?uri=github.com/cplieger/health)
-[![Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/cplieger/health/badges/coverage.json)](https://github.com/cplieger/health/actions/workflows/coverage.yml)
+[![Test coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/cplieger/health/badges/coverage.json)](https://github.com/cplieger/health/actions/workflows/coverage.yml)
+[![Mutation](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/cplieger/health/badges/mutation.json)](https://github.com/cplieger/health/issues?q=label%3Agremlins-tracker)
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/13212/badge)](https://www.bestpractices.dev/projects/13212)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/cplieger/health/badge)](https://scorecard.dev/viewer/?uri=github.com/cplieger/health)
 
 > File-based healthcheck for distroless containers
 
