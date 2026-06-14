@@ -4,6 +4,8 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/cplieger/health.svg)](https://pkg.go.dev/github.com/cplieger/health)
 [![Go Report Card](https://goreportcard.com/badge/github.com/cplieger/health)](https://goreportcard.com/report/github.com/cplieger/health)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/cplieger/health/badge)](https://scorecard.dev/viewer/?uri=github.com/cplieger/health)
+[![Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/cplieger/health/badges/coverage.json)](https://github.com/cplieger/health/actions/workflows/coverage.yml)
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/13212/badge)](https://www.bestpractices.dev/projects/13212)
 
 > File-based healthcheck for distroless containers
 
