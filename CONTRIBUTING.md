@@ -105,8 +105,7 @@ The whole surface is small enough to enumerate; keep it that way.
   copying it.
 - `Handler(s Signal) http.Handler` — optional JSON endpoint for K8s HTTP
   probes; 200 `{"status":"OK",...}` when healthy, 503
-  `{"status":"Unavailable",...}` otherwise. A nil `Signal` always reports
-  503.
+  `{"status":"Unavailable",...}` otherwise. A nil `Signal` always reports 503.
 - `Status` — the JSON response struct (`Status`, `Timestamp`) emitted by
   `Handler`.
 
