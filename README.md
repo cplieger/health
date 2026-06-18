@@ -97,15 +97,15 @@ The following features are deliberately excluded. This library complements
 HTTP-based health libraries (e.g. hellofresh/health-go, alexliesenfeld/health)
 rather than competing with them.
 
-| Feature | Rationale |
-|---------|-----------|
-| Registered dependency checks | `Set(bool)` is the aggregation point; the app owns the decision logic. A check registry is a fundamentally different abstraction (~150 LOC, specialized). |
-| Liveness/readiness split | Docker Compose has one HEALTHCHECK. For K8s, create two `Marker` instances with different paths. |
-| Graceful shutdown / context.Context | `Cleanup()` is the shutdown action. No background goroutines exist to cancel. |
-| Status-change callbacks | State transitions are logged via slog. Wrap `Set()` for custom callbacks. |
-| Marker staleness / mtime checks | Docker's `--interval`/`--timeout` handle staleness at the orchestrator level. |
-| Prometheus metrics | Trivially added by consumers: `prometheus.NewGaugeFunc(opts, func() float64 { ... })`. |
-| Custom marker content | The pattern's elegance is `os.Stat` — no parsing, no format versioning. |
+| Feature                             | Rationale                                                                                                                                                 |
+| ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Registered dependency checks        | `Set(bool)` is the aggregation point; the app owns the decision logic. A check registry is a fundamentally different abstraction (~150 LOC, specialized). |
+| Liveness/readiness split            | Docker Compose has one HEALTHCHECK. For K8s, create two `Marker` instances with different paths.                                                          |
+| Graceful shutdown / context.Context | `Cleanup()` is the shutdown action. No background goroutines exist to cancel.                                                                             |
+| Status-change callbacks             | State transitions are logged via slog. Wrap `Set()` for custom callbacks.                                                                                 |
+| Marker staleness / mtime checks     | Docker's `--interval`/`--timeout` handle staleness at the orchestrator level.                                                                             |
+| Prometheus metrics                  | Trivially added by consumers: `prometheus.NewGaugeFunc(opts, func() float64 { ... })`.                                                                    |
+| Custom marker content               | The pattern's elegance is `os.Stat` — no parsing, no format versioning.                                                                                   |
 
 ## License
 
