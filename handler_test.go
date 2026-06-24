@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 )
 
 type stubSignal struct{ healthy bool }
@@ -68,5 +70,37 @@ func TestHandler_Unhealthy(t *testing.T) {
 	}
 	if st.Status != "Unavailable" {
 		t.Fatalf("status = %q, want Unavailable", st.Status)
+	}
+}
+
+// TestHandler_emitsDocumentedWireShape pins the on-the-wire JSON contract
+// documented in README ({"status":"OK","timestamp":...}, mirroring
+// hellofresh/health-go). Existing tests decode into the Status struct, so a
+// json-tag rename round-trips cleanly and passes them all; this inspects the
+// raw body bytes and the RFC3339 timestamp, failing on such a rename.
+func TestHandler_emitsDocumentedWireShape(t *testing.T) {
+	okRec := httptest.NewRecorder()
+	Handler(stubSignal{healthy: true}).ServeHTTP(okRec, httptest.NewRequest(http.MethodGet, "/health", nil))
+	okBody := strings.TrimSpace(okRec.Body.String())
+	if !strings.Contains(okBody, `"status":"OK"`) {
+		t.Errorf("healthy body = %q, want it to contain the literal \"status\":\"OK\"", okBody)
+	}
+	if !strings.Contains(okBody, `"timestamp":`) {
+		t.Errorf("healthy body = %q, want a \"timestamp\" key", okBody)
+	}
+
+	badRec := httptest.NewRecorder()
+	Handler(stubSignal{healthy: false}).ServeHTTP(badRec, httptest.NewRequest(http.MethodGet, "/health", nil))
+	badBody := strings.TrimSpace(badRec.Body.String())
+	if !strings.Contains(badBody, `"status":"Unavailable"`) {
+		t.Errorf("unhealthy body = %q, want the literal \"status\":\"Unavailable\"", badBody)
+	}
+
+	var st Status
+	if err := json.Unmarshal([]byte(okBody), &st); err != nil {
+		t.Fatalf("decode healthy body: %v", err)
+	}
+	if _, err := time.Parse(time.RFC3339, st.Timestamp); err != nil {
+		t.Errorf("Timestamp = %q, not parseable as RFC3339: %v", st.Timestamp, err)
 	}
 }

@@ -487,3 +487,124 @@ func TestHealthMarker_Healthy_nilReceiver(t *testing.T) {
 		t.Error("Signal backed by nil *Marker: Healthy() = true, want false")
 	}
 }
+
+// TestRunProbe_unhealthy_emitsDiagnostic asserts the operator diagnostic on the
+// unhealthy path: RunProbe prints "unhealthy: marker absent" to stderr before
+// exiting 1. TestRunProbe_exits covers the exit code but not this message.
+func TestRunProbe_unhealthy_emitsDiagnostic(t *testing.T) {
+	if os.Getenv("HEALTH_DIAG_CASE") != "" {
+		RunProbe(os.Getenv("HEALTH_DIAG_PATH"))
+		return
+	}
+	badPath := filepath.Join(t.TempDir(), ".healthy")
+
+	cmd := exec.Command(os.Args[0], "-test.run=^TestRunProbe_unhealthy_emitsDiagnostic$")
+	cmd.Env = append(os.Environ(),
+		"HEALTH_DIAG_CASE=1",
+		"HEALTH_DIAG_PATH="+badPath)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+
+	var ee *exec.ExitError
+	if !errors.As(err, &ee) {
+		t.Fatalf("RunProbe(absent marker): expected *exec.ExitError, got %v", err)
+	}
+	if ee.ExitCode() != 1 {
+		t.Fatalf("RunProbe(absent marker) exit = %d, want 1", ee.ExitCode())
+	}
+	if !strings.Contains(stderr.String(), "unhealthy: marker absent") {
+		t.Errorf("stderr = %q, want it to contain %q", stderr.String(), "unhealthy: marker absent")
+	}
+}
+
+// TestHealthMarker_Set_transitionLoggingSilentOnRepeat pins the documented
+// edge-transition logging contract (go.md: repeated calls with the same value
+// are silent so per-tick scheduler flips do not spam Loki). Set already has 100%
+// statement coverage; this asserts the `changed` gate by counting transitions.
+// A regression that logs on every call (mutant changed := true) passes every
+// other test but fails here.
+func TestHealthMarker_Set_transitionLoggingSilentOnRepeat(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".healthy")
+	m := NewMarker(path)
+	if m.degraded {
+		t.Skip("parent dir not writable in this environment; skipping")
+	}
+
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	m.Set(true)  // transition false->true: one INFO
+	m.Set(true)  // repeat: silent
+	m.Set(true)  // repeat: silent
+	m.Set(false) // transition true->false: one WARN
+	m.Set(false) // repeat: silent
+
+	log := buf.String()
+	if got := strings.Count(log, `msg="health state changed" healthy=true`); got != 1 {
+		t.Errorf("Set(true) edge-transition logs = %d, want exactly 1\nlog:\n%s", got, log)
+	}
+	if got := strings.Count(log, `msg="health state changed" healthy=false`); got != 1 {
+		t.Errorf("Set(false) edge-transition logs = %d, want exactly 1\nlog:\n%s", got, log)
+	}
+}
+
+// TestHealthMarker_Set_firstSetFalseAnnouncesState pins the `!m.known` term:
+// the documented startup pattern calls Set(false) once to clear stale state
+// before Set(true), and that first call must announce the initial state even
+// though false equals the zero value of m.healthy. A mutant dropping !m.known
+// swallows this log yet passes every other test.
+func TestHealthMarker_Set_firstSetFalseAnnouncesState(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".healthy")
+	m := NewMarker(path)
+	if m.degraded {
+		t.Skip("parent dir not writable in this environment; skipping")
+	}
+
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	m.Set(false) // first call on a fresh marker: announces initial state
+	m.Set(false) // repeat: silent
+
+	log := buf.String()
+	if got := strings.Count(log, `msg="health state changed" healthy=false`); got != 1 {
+		t.Errorf("first Set(false) announce logs = %d, want exactly 1\nlog:\n%s", got, log)
+	}
+}
+
+// TestNewMarker_degraded_logsHintOnce asserts the operator-facing degraded
+// contract: NewMarker on an unwritable dir emits exactly one WARN carrying the
+// compose-fix hint. Existing degraded tests assert only no-op file behavior, so
+// a regression dropping the hint (or the Warn) would be invisible.
+func TestNewMarker_degraded_logsHintOnce(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "ro")
+	if err := os.Mkdir(dir, 0o500); err != nil {
+		t.Fatalf("mkdir ro: %v", err)
+	}
+
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	m := NewMarker(filepath.Join(dir, ".healthy"))
+	if !m.degraded {
+		t.Skip("test environment bypasses directory mode; skipping")
+	}
+
+	log := buf.String()
+	if got := strings.Count(log, "health marker directory not writable"); got != 1 {
+		t.Errorf("degraded-construction WARN count = %d, want exactly 1\nlog:\n%s", got, log)
+	}
+	if !strings.Contains(log, "level=WARN") {
+		t.Errorf("degraded construction must log at WARN; log:\n%s", log)
+	}
+	if !strings.Contains(log, "hint=") || !strings.Contains(log, "tmpfs") {
+		t.Errorf("degraded WARN must carry a compose-fix hint mentioning tmpfs; log:\n%s", log)
+	}
+}

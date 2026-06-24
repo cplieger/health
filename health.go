@@ -1,6 +1,5 @@
 // Package health implements file-based healthchecks for distroless containers.
-package health
-
+//
 // Docker's HEALTHCHECK needs a command inside the container. Distroless
 // images have no curl/wget/shell, so the canonical approach is to
 // re-invoke the app binary with a `health` subcommand that probes the
@@ -17,14 +16,19 @@ package health
 //     healthy, because the container is alive and the only broken piece
 //     is the signaling channel. Reporting unhealthy would trigger a
 //     Docker restart loop that cannot fix a compose misconfiguration.
-//   - Transient failures (full tmpfs, directory churn) during Set are
-//     logged at Warn but do not change the marker's mode. They surface
-//     at the next probe interval as an unhealthy signal.
+//   - Transient failures during Set are logged at Warn but do not change
+//     the marker's mode. A failed Set that leaves the marker absent on a
+//     still-writable directory (e.g. directory churn) surfaces at the next
+//     probe as unhealthy. A failure whose cause also leaves the directory
+//     unwritable (full tmpfs), and a failed Set(false) that leaves the marker
+//     present, are both reported healthy by the probe, matching the
+//     degraded-mode rationale above.
 //
 // Logging goes through slog.Default(); configure it via slog.SetDefault
 // in main before constructing a Marker.
 //
 // Thread-safe; Set may be called from any goroutine.
+package health
 
 import (
 	"errors"
