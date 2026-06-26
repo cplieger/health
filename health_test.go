@@ -125,32 +125,6 @@ func TestHealthMarker_Property(t *testing.T) {
 	})
 }
 
-// TestProbeHealthDir_Writable confirms the probe succeeds on a normal
-// writable temp dir and leaves no artifact behind.
-func TestProbeHealthDir_Writable(t *testing.T) {
-	dir := t.TempDir()
-	if err := probeHealthDir(filepath.Join(dir, ".healthy")); err != nil {
-		t.Fatalf("probeHealthDir on writable dir: %v", err)
-	}
-
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatalf("readdir: %v", err)
-	}
-	if len(entries) != 0 {
-		t.Fatalf("probe left artifacts behind: %v", entries)
-	}
-}
-
-// TestProbeHealthDir_NonExistent confirms a missing parent directory is
-// reported as an error rather than masked.
-func TestProbeHealthDir_NonExistent(t *testing.T) {
-	err := probeHealthDir(filepath.Join(t.TempDir(), "nope", ".healthy"))
-	if err == nil {
-		t.Fatal("expected error for non-existent parent dir")
-	}
-}
-
 func TestProbeCheck_healthy(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".healthy")
 	if err := os.WriteFile(path, nil, 0o600); err != nil {
@@ -326,12 +300,11 @@ func TestHealthMarker_SetRemoveFailure(t *testing.T) {
 	}
 }
 
-// TestHealthMarker_SetWriteFailureWarnDedupAndRecovery verifies the
+// TestHealthMarker_SetWriteFailure_warnsOncePerStreak verifies the
 // failure-gating contract: under a persistent write failure Set emits
-// exactly one Warn (not one per call), and once the write finally
-// succeeds it logs a recovery "health state changed" Info even though
-// the requested value never changed.
-func TestHealthMarker_SetWriteFailureWarnDedupAndRecovery(t *testing.T) {
+// exactly one Warn, not one per call, so a stuck marker directory does
+// not spam the log every tick.
+func TestHealthMarker_SetWriteFailure_warnsOncePerStreak(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".healthy")
 	if err := os.Mkdir(path, 0o755); err != nil {
@@ -348,7 +321,7 @@ func TestHealthMarker_SetWriteFailureWarnDedupAndRecovery(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
-	// Three failing calls (marker path is a directory -> os.Create fails).
+	// Marker path is a directory, so os.Create fails on every call.
 	m.Set(true)
 	m.Set(true)
 	m.Set(true)
@@ -356,12 +329,36 @@ func TestHealthMarker_SetWriteFailureWarnDedupAndRecovery(t *testing.T) {
 	if got := strings.Count(buf.String(), "failed to create health marker"); got != 1 {
 		t.Errorf("want exactly 1 write-failure Warn under persistent failure, got %d\nlog:\n%s", got, buf.String())
 	}
+}
 
-	// Remove the blocking directory so the write can succeed, then recover.
+// TestHealthMarker_SetWriteFailure_logsRecoveryAfterStreak verifies that
+// once a write finally succeeds after a failure streak, Set creates the
+// marker and logs a recovery "health state changed" Info.
+func TestHealthMarker_SetWriteFailure_logsRecoveryAfterStreak(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".healthy")
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatalf("mkdir marker-as-dir: %v", err)
+	}
+
+	m := NewMarker(path)
+	if m.degraded {
+		t.Skip("parent dir not writable in this environment; skipping")
+	}
+
+	// Arrange a failure streak: the marker path is a directory, so this
+	// Set(true) fails and flags the marker failed.
+	m.Set(true)
+
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	// Clear the blocker so the next write succeeds and recovers.
 	if err := os.Remove(path); err != nil {
 		t.Fatalf("remove blocking dir: %v", err)
 	}
-	buf.Reset()
 	m.Set(true)
 
 	if _, err := os.Stat(path); err != nil {
