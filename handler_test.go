@@ -24,6 +24,9 @@ func TestHandler_Healthy(t *testing.T) {
 	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
 		t.Fatalf("Content-Type = %q, want application/json", ct)
 	}
+	if xcto := rec.Header().Get("X-Content-Type-Options"); xcto != "nosniff" {
+		t.Errorf("X-Content-Type-Options = %q, want nosniff", xcto)
+	}
 	var st Status
 	if err := json.NewDecoder(rec.Body).Decode(&st); err != nil {
 		t.Fatalf("decode: %v", err)
