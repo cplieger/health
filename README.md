@@ -2,7 +2,6 @@
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/cplieger/health.svg)](https://pkg.go.dev/github.com/cplieger/health)
 [![Go version](https://img.shields.io/github/go-mod/go-version/cplieger/health)](https://github.com/cplieger/health/blob/main/go.mod)
-[![Go Report Card](https://goreportcard.com/badge/github.com/cplieger/health)](https://goreportcard.com/report/github.com/cplieger/health)
 [![Test coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/cplieger/health/badges/coverage.json)](https://github.com/cplieger/health/actions/workflows/coverage.yml)
 [![Mutation](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/cplieger/health/badges/mutation.json)](https://github.com/cplieger/health/issues?q=label%3Agremlins-tracker)
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/13212/badge)](https://www.bestpractices.dev/projects/13212)
@@ -106,6 +105,12 @@ rather than competing with them.
 | Marker staleness / mtime checks     | Docker's `--interval`/`--timeout` handle staleness at the orchestrator level.                                                                             |
 | Prometheus metrics                  | Trivially added by consumers: `prometheus.NewGaugeFunc(opts, func() float64 { ... })`.                                                                    |
 | Custom marker content               | The pattern's elegance is `os.Stat` — no parsing, no format versioning.                                                                                   |
+
+## Disclaimer
+
+This project is built with care and follows security best practices, but it is intended for personal / self-hosted use. No guarantees of fitness for production environments. Use at your own risk.
+
+This project was built with AI-assisted tooling using [Claude Opus](https://www.anthropic.com/claude) and [Kiro](https://kiro.dev). The human maintainer defines architecture, supervises implementation, and makes all final decisions.
 
 ## License
 

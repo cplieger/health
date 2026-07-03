@@ -67,26 +67,13 @@ behavior ever legitimately changes.
 
 ## Unsupported by design — a binding contract
 
-The "Unsupported by design" table in `README.md` lists deliberate
-non-features, not a TODO list. This library complements HTTP-based health
-libraries (hellofresh/health-go, alexliesenfeld/health) rather than
-competing with them. Please do not add:
+The "[Unsupported by design](README.md#unsupported-by-design)" table in
+`README.md` lists deliberate non-features, not a TODO list. This library
+complements HTTP-based health libraries (hellofresh/health-go,
+alexliesenfeld/health) rather than competing with them.
 
-- A registered dependency-check registry — `Set(bool)` is the single
-  aggregation point and the app owns all decision logic.
-- A liveness/readiness split — Docker has one `HEALTHCHECK`; for K8s,
-  construct two `Marker` instances with different paths.
-- Graceful shutdown / `context.Context` plumbing — `Cleanup()` is the only
-  shutdown action and there are no goroutines to cancel.
-- Status-change callbacks — transitions are logged via slog; wrap `Set()`
-  for custom behavior.
-- Marker staleness / mtime checks — Docker's `--interval`/`--timeout` own
-  staleness at the orchestrator level.
-- Prometheus metrics or custom marker content — both are out of scope; the
-  pattern's elegance is `os.Stat` with no parsing or format versioning.
-
-A PR that adds one of these will be declined regardless of quality. If you
-think a non-goal should change, open an issue first.
+A PR that adds one of those non-goals will be declined regardless of
+quality. If you think a non-goal should change, open an issue first.
 
 ## Public API
 
@@ -161,11 +148,11 @@ added seed corpus entry.
 ### Mutation testing
 
 `.gremlins.yaml` configures [Gremlins](https://gremlins.dev) mutation
-testing, synced fleet-wide from `cplieger/ci`. Note that `health.go` is on
-the central `exclude-files` list (the filesystem ops produce stuck live
-mutants without integration tests), so the score reflects `handler.go` and
-the probe logic. The weekly central runner tracks efficacy; run it locally
-to check that new tests kill mutants:
+testing (synced from `cplieger/ci`; change it upstream). Note that
+`health.go` is on the central `exclude-files` list (the filesystem ops
+produce stuck live mutants without integration tests), so the score
+reflects `handler.go` and the probe logic. Run it locally to check that new
+tests kill mutants:
 
 ```sh
 gremlins unleash .
