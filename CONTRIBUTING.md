@@ -118,7 +118,7 @@ go test -bench=. -benchmem .
 ### Linting and formatting
 
 Lint config is `.golangci.yaml` (golangci-lint v2). It enables `gosec`,
-`gocritic`, `revive`, `gocyclo` (complexity cap 18), `sloglint` (kv-only),
+`gocritic`, `revive`, `gocyclo` (complexity cap 15), `sloglint` (kv-only),
 and others. Formatting is `gofumpt` with `extra-rules` plus `gci` import
 grouping (standard → third-party); `golangci-lint run` reports unformatted
 files as issues, so format before pushing.
@@ -134,8 +134,8 @@ call sites.
 
 ### Fuzzing
 
-Fuzz targets live in `fuzz_test.go`. Run one at a time with a time
-budget:
+Fuzz targets live in `health_fuzz_test.go` and `handler_fuzz_test.go`. Run
+one at a time with a time budget:
 
 ```sh
 go test -run='^$' -fuzz=FuzzHandlerSignal -fuzztime=30s .
@@ -168,7 +168,8 @@ the right file when adding cases:
   value), probe-dir checks, and the concurrent race test.
 - `handler_test.go` — HTTP handler status codes and JSON shape (defines the
   shared `stubSignal`).
-- `fuzz_test.go` — `FuzzHandlerSignal` and `FuzzProbeCheck`.
+- `handler_fuzz_test.go` — `FuzzHandlerSignal`; `health_fuzz_test.go` —
+  `FuzzProbeCheck`.
 - `example_test.go` — runnable `Example` / `ExampleProbeCheck` functions
   that double as documentation; keep their `// Output:` blocks correct.
 - `bench_test.go` — allocation/throughput benchmarks.
