@@ -605,3 +605,49 @@ func TestNewMarker_degraded_logsHintOnce(t *testing.T) {
 		t.Errorf("degraded WARN must carry a compose-fix hint mentioning tmpfs; log:\n%s", log)
 	}
 }
+
+// TestHealthMarker_Set_recoveryLogsOnFalseBranchAfterStreak pins the
+// `recovered` term of Set's Set(false) branch. Its Set(true) twin is covered
+// by TestHealthMarker_SetWriteFailure_logsRecoveryAfterStreak, but the
+// symmetric false-branch recovery log has no test: a mutant weakening
+// `changed || recovered` to `changed` on the remove path passes every other
+// test. The sequence drives the marker to known=true, healthy=false,
+// failed=true (a clean Set(false), then a Set(true) that fails because the
+// path is a directory), so the final successful Set(false) has changed=false
+// and logs only via the recovered term.
+func TestHealthMarker_Set_recoveryLogsOnFalseBranchAfterStreak(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".healthy")
+
+	m := NewMarker(path)
+	if m.degraded {
+		t.Skip("parent dir not writable in this environment; skipping")
+	}
+
+	// known=true, healthy=false via a clean Set(false) (marker absent, remove
+	// is a no-op).
+	m.Set(false)
+
+	// Make the marker path an empty directory: the next Set(true) fails
+	// (os.Create on a dir errors) and flags the marker failed, but a later
+	// os.Remove of the empty dir still succeeds.
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatalf("mkdir marker-as-dir: %v", err)
+	}
+	m.Set(true) // fails: flags failed=true, healthy stays false
+
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	// Set(false) now succeeds (removes the empty dir). healthy is already
+	// false so changed=false; the recovery WARN fires only via the recovered
+	// term as the failure streak clears.
+	m.Set(false)
+
+	log := buf.String()
+	if got := strings.Count(log, `msg="health state changed" healthy=false`); got != 1 {
+		t.Errorf("recovery WARN on false-branch after streak = %d, want exactly 1\nlog:\n%s", got, log)
+	}
+}
