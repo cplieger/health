@@ -651,3 +651,45 @@ func TestHealthMarker_Set_recoveryLogsOnFalseBranchAfterStreak(t *testing.T) {
 		t.Errorf("recovery WARN on false-branch after streak = %d, want exactly 1\nlog:\n%s", got, log)
 	}
 }
+
+// TestHealthMarker_SetFailureWarnDedupAlternatingBranches pins the
+// per-signature de-dup contract across alternating failing branches in a
+// single streak. With the marker path a non-empty directory, both Set(true)
+// (os.Create fails) and Set(false) (os.Remove of a non-empty dir fails) keep
+// failing, so an alternating Set(true)/Set(false) sequence toggles between the
+// create and remove messages. The de-dup must key on the (message, error)
+// signature set for the streak, emitting exactly one Warn per distinct
+// message rather than re-logging on every toggle.
+func TestHealthMarker_SetFailureWarnDedupAlternatingBranches(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".healthy")
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatalf("mkdir marker-as-dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(path, "child"), nil, 0o600); err != nil {
+		t.Fatalf("write child: %v", err)
+	}
+
+	m := NewMarker(path)
+	if m.degraded {
+		t.Skip("parent dir not writable in this environment; skipping")
+	}
+
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	m.Set(true)
+	m.Set(false)
+	m.Set(true)
+	m.Set(false)
+
+	log := buf.String()
+	if got := strings.Count(log, "failed to create health marker"); got != 1 {
+		t.Errorf("want exactly 1 create-failure Warn in one streak, got %d\nlog:\n%s", got, log)
+	}
+	if got := strings.Count(log, "failed to remove health marker"); got != 1 {
+		t.Errorf("want exactly 1 remove-failure Warn in one streak, got %d\nlog:\n%s", got, log)
+	}
+}
