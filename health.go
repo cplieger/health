@@ -37,6 +37,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 )
 
@@ -61,12 +62,13 @@ const DefaultPath = "/tmp/.healthy"
 // defer Cleanup on shutdown; call RunProbe from main when os.Args[1] is
 // "health".
 type Marker struct {
-	path     string
-	mu       sync.Mutex
-	known    bool // true once Set has been called at least once
-	healthy  bool // last value SUCCESSFULLY applied to the marker
-	failed   bool // last filesystem op failed; gates duplicate warns
-	degraded bool // true when marker dir is not writable
+	path           string
+	loggedFailSigs []string // failure signatures (msg + error) already logged during the current streak
+	mu             sync.Mutex
+	known          bool // true once Set has been called at least once
+	healthy        bool // last value SUCCESSFULLY applied to the marker
+	failed         bool // last filesystem op failed; gates duplicate warns
+	degraded       bool // true when marker dir is not writable
 }
 
 // NewMarker constructs a marker for path and probes the parent
@@ -205,12 +207,22 @@ func ProbeDir(path string) error {
 
 // --- helpers ---
 
-// warnFailure logs a filesystem-op failure exactly once per
-// failure streak (gated by m.failed) so repeated failures do not
-// spam the log, then marks the marker failed. Caller holds m.mu.
+// warnFailure logs a filesystem-op failure once per distinct (message,
+// error) signature per streak, keying on both the static message AND the
+// underlying error. A repeated identical failure stays silent (anti-spam),
+// while a new message OR a new underlying error arising mid-streak still
+// surfaces exactly once. This closes two facets of the coarser single-slot
+// de-dup: alternating branch messages no longer re-spam within one streak,
+// and a same-branch root-cause change (e.g. ENOSPC then EACCES) is no longer
+// masked. Then it marks the marker failed. Caller holds m.mu.
 func (m *Marker) warnFailure(msg string, err error) {
 	if !m.failed {
+		m.loggedFailSigs = m.loggedFailSigs[:0]
+	}
+	sig := msg + "\x00" + err.Error()
+	if !slices.Contains(m.loggedFailSigs, sig) {
 		slog.Warn(msg, "path", m.path, "error", err)
+		m.loggedFailSigs = append(m.loggedFailSigs, sig)
 	}
 	m.failed = true
 }
@@ -221,6 +233,7 @@ func (m *Marker) warnFailure(msg string, err error) {
 func (m *Marker) recordState(ok bool) (recovered bool) {
 	recovered = m.failed
 	m.known, m.healthy, m.failed = true, ok, false
+	m.loggedFailSigs = m.loggedFailSigs[:0]
 	return recovered
 }
 
