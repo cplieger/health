@@ -7,9 +7,14 @@
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/13212/badge)](https://www.bestpractices.dev/projects/13212)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/cplieger/health/badge)](https://scorecard.dev/viewer/?uri=github.com/cplieger/health)
 
-> File-based healthcheck for distroless containers
+> Healthchecks for distroless containers: file marker + HTTP probe
 
-A standalone Go library implementing the file-marker health-signal pattern for Docker containers that lack a shell. The running process touches/removes a marker file; the probe process (re-invoked binary) stats it. Handles degraded mode (read-only filesystem) gracefully. Standard library only (test dependency: pgregory.net/rapid).
+A standalone Go library for Docker healthchecks in containers that lack a shell. Two modes:
+
+- **File marker** — for containers whose main process is your own Go binary. The running process touches/removes a marker file; the probe process (re-invoked binary) stats it. Handles degraded mode (read-only filesystem) gracefully.
+- **HTTP probe** — for containers wrapping a third-party server (Caddy, an upstream daemon) that cannot cooperate with a marker but already exposes an HTTP endpoint whose reachability is the health signal. `cmd/probe` is the ready-made static binary to bake into the image.
+
+When you own the main process, prefer the file marker: `Set(bool)` expresses application state a network GET cannot. Standard library only (test dependency: pgregory.net/rapid).
 
 ## Install
 
@@ -42,6 +47,34 @@ if len(os.Args) > 1 && os.Args[1] == "health" {
     health.RunProbe(health.DefaultPath)
 }
 ```
+
+### HTTP probe (wrapped third-party servers)
+
+For images whose main process is not your code — so nothing can touch a
+marker — bake the standalone probe binary into the image and point it at
+the endpoint(s) that define liveness:
+
+```dockerfile
+FROM golang:1.26-alpine AS probe
+RUN CGO_ENABLED=0 GOBIN=/out go install github.com/cplieger/health/cmd/probe@latest
+
+FROM gcr.io/distroless/static-debian12
+COPY --from=probe /out/probe /probe
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+    CMD ["/probe", "http://127.0.0.1:2019/config/"]
+```
+
+Multiple URLs probe multiple surfaces in one run (all must answer 2xx
+within one shared `-timeout` budget, default 5s):
+
+```dockerfile
+CMD ["/probe", "http://127.0.0.1:80/health", "http://127.0.0.1:2019/config/"]
+```
+
+Exit codes: 0 all healthy, 1 any probe failed (each failure written to
+stderr, visible in `docker inspect`), 2 usage error. From Go, the same
+logic is `health.ProbeHTTP(ctx, url)` / `health.HTTPProbeCheck(w,
+timeout, urls...)` / `health.RunHTTPProbe(timeout, urls...)`.
 
 ### Optional HTTP handler (K8s HTTP probes)
 
@@ -89,12 +122,18 @@ Response (503 Service Unavailable):
 - `RunProbe(path string)` — probe process entry (calls os.Exit)
 - `ProbeCheck(path string) int` — testable probe logic (0=healthy, 1=unhealthy)
 - `ProbeDir(path string) error` — reports whether the marker's parent directory is writable (the degraded-mode check NewMarker/ProbeCheck use internally, exported for consumers and their tests)
+- `DefaultHTTPProbeTimeout` — default shared budget for one HTTP probe run (5s)
+- `ProbeHTTP(ctx context.Context, url string) error` — single HTTP liveness GET; nil on a 2xx final response
+- `HTTPProbeCheck(w io.Writer, timeout time.Duration, urls ...string) int` — testable multi-URL probe (0=all healthy, 1 otherwise; probes all URLs, one failure line each; zero URLs is unhealthy)
+- `RunHTTPProbe(timeout time.Duration, urls ...string)` — HTTP probe process entry (calls os.Exit); `cmd/probe` is the ready-made binary around it
 
 ## Unsupported by design
 
 The following features are deliberately excluded. This library complements
 HTTP-based health libraries (e.g. hellofresh/health-go, alexliesenfeld/health)
-rather than competing with them.
+rather than competing with them — those are server-side check frameworks,
+while this library's HTTP probe is a client-side liveness GET for the
+HEALTHCHECK side of the same connection.
 
 | Feature                             | Rationale                                                                                                                                                 |
 | ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
