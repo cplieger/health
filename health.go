@@ -1,11 +1,23 @@
-// Package health implements file-based healthchecks for distroless containers.
+// Package health implements healthchecks for distroless containers.
 //
-// Docker's HEALTHCHECK needs a command inside the container. Distroless
-// images have no curl/wget/shell, so the canonical approach is to
-// re-invoke the app binary with a `health` subcommand that probes the
-// application's liveness. This package uses a file marker at DefaultPath:
-// the running process touches the file at lifecycle points, the probe
-// process stats it.
+// Docker's HEALTHCHECK needs a command inside the container, and
+// distroless images have no curl/wget/shell. This package covers the
+// two shapes that problem takes:
+//
+//   - File marker (Marker, RunProbe): for containers whose main process
+//     is your own Go binary. The running process touches the file at
+//     DefaultPath at lifecycle points; the probe process (the same
+//     binary re-invoked with a `health` subcommand) stats it. The app
+//     owns the health decision via Set.
+//   - HTTP probe (ProbeHTTP, RunHTTPProbe, cmd/probe): for containers
+//     that wrap a third-party server which cannot cooperate with a
+//     Marker but already exposes an HTTP endpoint whose reachability IS
+//     the health signal. The standalone cmd/probe binary is installed
+//     into the image and wired as the HEALTHCHECK.
+//
+// When you own the main process, prefer the file marker: Set expresses
+// application state a network GET cannot. The rest of this doc comment
+// describes the file-marker mode.
 //
 // Failure modes:
 //   - If the marker directory is not writable (typically compose declares

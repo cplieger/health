@@ -1,7 +1,10 @@
 package health_test
 
 import (
+	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 
@@ -23,6 +26,34 @@ func Example() {
 	// Output:
 	// healthy: true
 	// healthy: false
+}
+
+// ExampleProbeHTTP shows the HTTP liveness probe for containers that
+// wrap a third-party server exposing an HTTP endpoint.
+func ExampleProbeHTTP() {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	err := health.ProbeHTTP(context.Background(), srv.URL)
+	fmt.Println("healthy:", err == nil)
+	// Output:
+	// healthy: true
+}
+
+// ExampleHTTPProbeCheck shows the multi-URL probe behind cmd/probe: all
+// URLs must answer 2xx within one shared timeout.
+func ExampleHTTPProbeCheck() {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	code := health.HTTPProbeCheck(os.Stderr, health.DefaultHTTPProbeTimeout, srv.URL)
+	fmt.Println("exit code:", code)
+	// Output:
+	// exit code: 0
 }
 
 // ExampleProbeCheck shows how to use ProbeCheck for a testable probe
