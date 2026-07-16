@@ -105,9 +105,16 @@ The whole surface is small enough to enumerate; keep it that way.
   compile-time assertion guards this).
 - `Marker` — main type. `NewMarker(path) *Marker`, `Set(ok bool)`,
   `Cleanup()`, `Healthy() bool`.
-- `RunProbe(path string)` — probe-process entry point; calls `os.Exit`.
-- `ProbeCheck(path string) int` — the same decision without `os.Exit`, so
-  it is unit-testable (0 = healthy or degraded, 1 = unhealthy).
+- `RunProbe(path string, opts ...ProbeOption)` — probe-process entry point;
+  calls `os.Exit`.
+- `ProbeCheck(path string, opts ...ProbeOption) int` — the same decision
+  without `os.Exit`, so it is unit-testable (0 = healthy or degraded,
+  1 = unhealthy).
+- `ProbeOption` / `WithMaxAge(d)` — opt-in probe-side freshness deadline: a
+  marker older than `d` is unhealthy. Every `Set(true)` refreshes the
+  marker's mtime (pinned by test), so per-cycle `Set(true)` calls are the
+  heartbeat. Existence-only stays the default; never arm it for
+  externally-triggered apps.
 - `Handler(s Signal) http.Handler` — optional JSON endpoint for K8s HTTP
   probes; 200 `{"status":"OK",...}` when healthy, 503
   `{"status":"Unavailable",...}` otherwise. A nil `Signal` always reports 503.

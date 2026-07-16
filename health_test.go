@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"pgregory.net/rapid"
 )
@@ -153,6 +154,124 @@ func TestProbeCheck_degraded(t *testing.T) {
 	}
 	if got := ProbeCheck(path); got != 0 {
 		t.Errorf("ProbeCheck(unwritable dir) = %d, want 0 (degraded)", got)
+	}
+}
+
+// TestProbeCheck_maxAge covers the opt-in freshness deadline: fresh
+// markers pass, stale markers fail with a reason naming both ages, a
+// non-positive deadline disables the check, and absence keeps its own
+// diagnostic (the deadline never masks it).
+func TestProbeCheck_maxAge(t *testing.T) {
+	newMarker := func(t *testing.T, age time.Duration) string {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), ".healthy")
+		if err := os.WriteFile(path, nil, 0o600); err != nil {
+			t.Fatalf("create marker: %v", err)
+		}
+		old := time.Now().Add(-age)
+		if err := os.Chtimes(path, old, old); err != nil {
+			t.Fatalf("backdate marker: %v", err)
+		}
+		return path
+	}
+
+	t.Run("fresh_passes", func(t *testing.T) {
+		path := newMarker(t, 0)
+		if got := ProbeCheck(path, WithMaxAge(time.Hour)); got != 0 {
+			t.Errorf("ProbeCheck(fresh, 1h deadline) = %d, want 0", got)
+		}
+	})
+
+	t.Run("stale_fails_with_reason", func(t *testing.T) {
+		path := newMarker(t, 2*time.Hour)
+		code, reason := probeCheck(path, WithMaxAge(time.Hour))
+		if code != 1 {
+			t.Fatalf("probeCheck(2h old, 1h deadline) = %d, want 1", code)
+		}
+		if !strings.Contains(reason, "stale") || !strings.Contains(reason, "1h0m0s") {
+			t.Errorf("reason = %q, want it to name staleness and the max-age", reason)
+		}
+	})
+
+	t.Run("non_positive_disables", func(t *testing.T) {
+		path := newMarker(t, 24*time.Hour)
+		for _, d := range []time.Duration{0, -time.Minute} {
+			if got := ProbeCheck(path, WithMaxAge(d)); got != 0 {
+				t.Errorf("ProbeCheck(old marker, WithMaxAge(%v)) = %d, want 0 (disabled)", d, got)
+			}
+		}
+	})
+
+	t.Run("absent_keeps_absence_diagnostic", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), ".healthy")
+		code, reason := probeCheck(path, WithMaxAge(time.Hour))
+		if code != 1 {
+			t.Fatalf("probeCheck(absent, deadline armed) = %d, want 1", code)
+		}
+		if !strings.Contains(reason, "marker absent") {
+			t.Errorf("reason = %q, want the absence diagnostic", reason)
+		}
+	})
+}
+
+// TestProbeCheck_maxAge_boundary property-checks the freshness decision
+// around the deadline: strictly younger than max-age passes, strictly
+// older fails. Ages are constructed with at least a second of headroom
+// on the fresh side so the test's own execution time cannot flip the
+// verdict.
+func TestProbeCheck_maxAge_boundary(t *testing.T) {
+	rapid.Check(t, func(rt *rapid.T) {
+		maxAgeSec := rapid.IntRange(2, 7200).Draw(rt, "maxAgeSec")
+		deltaSec := rapid.IntRange(1, 3600).Draw(rt, "deltaSec")
+		stale := rapid.Bool().Draw(rt, "stale")
+
+		ageSec := maxAgeSec + deltaSec
+		if !stale {
+			ageSec = max(maxAgeSec-deltaSec, 0)
+		}
+
+		path := filepath.Join(t.TempDir(), ".healthy")
+		if err := os.WriteFile(path, nil, 0o600); err != nil {
+			rt.Fatalf("create marker: %v", err)
+		}
+		old := time.Now().Add(-time.Duration(ageSec) * time.Second)
+		if err := os.Chtimes(path, old, old); err != nil {
+			rt.Fatalf("backdate marker: %v", err)
+		}
+
+		got := ProbeCheck(path, WithMaxAge(time.Duration(maxAgeSec)*time.Second))
+		want := 0
+		if stale {
+			want = 1
+		}
+		if got != want {
+			rt.Fatalf("ProbeCheck(age %ds, max-age %ds) = %d, want %d", ageSec, maxAgeSec, got, want)
+		}
+	})
+}
+
+// TestHealthMarker_SetTrue_refreshesMtime pins the writer-side contract
+// an armed WithMaxAge deadline reads: every Set(true) refreshes the
+// marker's mtime (os.Create's O_TRUNC on the existing file), so
+// per-cycle Set(true) calls are heartbeats.
+func TestHealthMarker_SetTrue_refreshesMtime(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".healthy")
+	m := NewMarker(path)
+	m.Set(true)
+
+	old := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatalf("backdate marker: %v", err)
+	}
+
+	m.Set(true) // repeated same-value Set must still touch the file
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat marker: %v", err)
+	}
+	if age := time.Since(info.ModTime()); age > time.Minute {
+		t.Errorf("marker mtime is %v old after Set(true), want refreshed", age)
 	}
 }
 
