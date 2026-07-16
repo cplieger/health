@@ -12,13 +12,17 @@
 A standalone Go library for Docker healthchecks in containers that lack a shell. Two modes:
 
 - **File marker** — for containers whose main process is your own Go binary. The running process touches/removes a marker file; the probe process (re-invoked binary) stats it. Handles degraded mode (read-only filesystem) gracefully.
-- **HTTP probe** — for containers wrapping a third-party server (Caddy, an upstream daemon) that cannot cooperate with a marker but already exposes an HTTP endpoint whose reachability is the health signal. `cmd/probe` is the ready-made static binary to bake into the image.
+- **HTTP probe** — for containers wrapping a third-party server (Caddy, an upstream daemon) that cannot cooperate with a marker but already exposes an HTTP endpoint whose reachability is the health signal. Ships as its own nested module, [`github.com/cplieger/health/probe`](probe/), with `probe/cmd/probe` as the ready-made static binary to bake into the image.
 
 When you own the main process, prefer the file marker: `Set(bool)` expresses application state a network GET cannot. Standard library only (test dependency: pgregory.net/rapid).
+
+The two modules version and release independently (`vX.Y.Z` tags for the marker library, `probe/vX.Y.Z` for the probe), so a marker-side release never forces a probe release or vice versa.
 
 ## Install
 
 Go: `go get github.com/cplieger/health@latest`
+
+HTTP probe module: `go get github.com/cplieger/health/probe@latest`
 
 ## Usage
 
@@ -63,7 +67,7 @@ the endpoint(s) that define liveness:
 
 ```dockerfile
 FROM golang:1.26-alpine AS probe
-RUN CGO_ENABLED=0 GOBIN=/out go install github.com/cplieger/health/cmd/probe@latest
+RUN CGO_ENABLED=0 GOBIN=/out go install github.com/cplieger/health/probe/cmd/probe@latest
 
 FROM gcr.io/distroless/static-debian12
 COPY --from=probe /out/probe /probe
@@ -80,8 +84,9 @@ CMD ["/probe", "http://127.0.0.1:80/health", "http://127.0.0.1:2019/config/"]
 
 Exit codes: 0 all healthy, 1 any probe failed (each failure written to
 stderr, visible in `docker inspect`), 2 usage error. From Go, the same
-logic is `health.ProbeHTTP(ctx, url)` / `health.HTTPProbeCheck(w,
-timeout, urls...)` / `health.RunHTTPProbe(timeout, urls...)`.
+logic is `probe.URL(ctx, url)` / `probe.Check(w, timeout, urls...)` /
+`probe.Run(timeout, urls...)` from the
+`github.com/cplieger/health/probe` module.
 
 ### Optional HTTP handler (K8s HTTP probes)
 
@@ -128,10 +133,13 @@ Response (503 Service Unavailable):
 - `Handler(s Signal) http.Handler` — optional JSON health endpoint
 - `RunProbe(path string)` — probe process entry (calls os.Exit)
 - `ProbeCheck(path string) int` — testable probe logic (0=healthy, 1=unhealthy)
-- `DefaultHTTPProbeTimeout` — default shared budget for one HTTP probe run (5s)
-- `ProbeHTTP(ctx context.Context, url string) error` — single HTTP liveness GET; nil on a 2xx final response
-- `HTTPProbeCheck(w io.Writer, timeout time.Duration, urls ...string) int` — testable multi-URL probe (0=all healthy, 1 otherwise; probes all URLs, one failure line each; zero URLs is unhealthy)
-- `RunHTTPProbe(timeout time.Duration, urls ...string)` — HTTP probe process entry (calls os.Exit); `cmd/probe` is the ready-made binary around it
+
+In the `github.com/cplieger/health/probe` module:
+
+- `probe.DefaultTimeout` — default shared budget for one HTTP probe run (5s)
+- `probe.URL(ctx context.Context, url string) error` — single HTTP liveness GET; nil on a 2xx final response
+- `probe.Check(w io.Writer, timeout time.Duration, urls ...string) int` — testable multi-URL probe (0=all healthy, 1 otherwise; probes all URLs, one failure line each; zero URLs is unhealthy)
+- `probe.Run(timeout time.Duration, urls ...string)` — probe process entry (calls os.Exit); `probe/cmd/probe` is the ready-made binary around it
 
 ## Unsupported by design
 

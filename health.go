@@ -9,11 +9,12 @@
 //     DefaultPath at lifecycle points; the probe process (the same
 //     binary re-invoked with a `health` subcommand) stats it. The app
 //     owns the health decision via Set.
-//   - HTTP probe (ProbeHTTP, RunHTTPProbe, cmd/probe): for containers
-//     that wrap a third-party server which cannot cooperate with a
-//     Marker but already exposes an HTTP endpoint whose reachability IS
-//     the health signal. The standalone cmd/probe binary is installed
-//     into the image and wired as the HEALTHCHECK.
+//   - HTTP probe (the nested module github.com/cplieger/health/probe):
+//     for containers that wrap a third-party server which cannot
+//     cooperate with a Marker but already exposes an HTTP endpoint
+//     whose reachability IS the health signal. The standalone
+//     probe/cmd/probe binary is installed into the image and wired as
+//     the HEALTHCHECK.
 //
 // When you own the main process, prefer the file marker: Set expresses
 // application state a network GET cannot. The rest of this doc comment
