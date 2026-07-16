@@ -30,14 +30,15 @@ before constructing a `Marker`.
 The file marker assumes the container's main process is your own binary.
 Images that repackage a third-party server (Caddy, an upstream daemon)
 have nothing that can call `Set`, but they do expose an HTTP endpoint
-whose reachability is the health signal. `httpprobe.go` covers that
-case: `ProbeHTTP(ctx, url)` is a single liveness GET (2xx after
-redirects = healthy), `HTTPProbeCheck(w, timeout, urls...)` is the
-testable multi-URL aggregate (probes ALL URLs within one shared budget,
-one failure line each; zero URLs is deliberately unhealthy), and
-`RunHTTPProbe` is the `os.Exit` wrapper. `cmd/probe` is the ready-made
-static binary an image bakes in as its `HEALTHCHECK` (exit 0/1, 2 on
-usage errors).
+whose reachability is the health signal. The nested module
+`github.com/cplieger/health/probe` (the `probe/` directory, its own
+release lane with `probe/vX.Y.Z` tags) covers that case: `probe.URL(ctx,
+url)` is a single liveness GET (2xx after redirects = healthy),
+`probe.Check(w, timeout, urls...)` is the testable multi-URL aggregate
+(probes ALL URLs within one shared budget, one failure line each; zero
+URLs is deliberately unhealthy), and `probe.Run` is the `os.Exit`
+wrapper. `probe/cmd/probe` is the ready-made static binary an image
+bakes in as its `HEALTHCHECK` (exit 0/1, 2 on usage errors).
 
 The decision rule between the modes: own the main process → file marker
 (`Set` expresses application state a GET cannot); wrap a third-party
@@ -112,13 +113,15 @@ The whole surface is small enough to enumerate; keep it that way.
   `{"status":"Unavailable",...}` otherwise. A nil `Signal` always reports 503.
 - `Status` — the JSON response struct (`Status`, `Timestamp`) emitted by
   `Handler`.
-- `DefaultHTTPProbeTimeout` — default shared budget for one HTTP probe run
+In the `github.com/cplieger/health/probe` nested module:
+
+- `probe.DefaultTimeout` — default shared budget for one HTTP probe run
   (5s, matching the BusyBox-wget recipes the probe replaces).
-- `ProbeHTTP(ctx, url) error` — single HTTP liveness GET (2xx = nil).
-- `HTTPProbeCheck(w, timeout, urls...) int` — testable multi-URL probe
+- `probe.URL(ctx, url) error` — single HTTP liveness GET (2xx = nil).
+- `probe.Check(w, timeout, urls...) int` — testable multi-URL probe
   (0 = all healthy, 1 otherwise; probes all URLs; zero URLs is unhealthy).
-- `RunHTTPProbe(timeout, urls...)` — HTTP probe-process entry point; calls
-  `os.Exit`. `cmd/probe` is the flag-parsing binary around it.
+- `probe.Run(timeout, urls...)` — probe-process entry point; calls
+  `os.Exit`. `probe/cmd/probe` is the flag-parsing binary around it.
 
 ## Local development
 

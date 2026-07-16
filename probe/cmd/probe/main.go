@@ -16,11 +16,11 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/cplieger/health"
+	"github.com/cplieger/health/probe"
 )
 
 func main() {
-	timeout := flag.Duration("timeout", health.DefaultHTTPProbeTimeout,
+	timeout := flag.Duration("timeout", probe.DefaultTimeout,
 		"total wall-clock budget for all probes")
 	flag.Usage = func() {
 		fmt.Fprintf(flag.CommandLine.Output(),
@@ -32,5 +32,5 @@ func main() {
 		flag.Usage()
 		os.Exit(2)
 	}
-	health.RunHTTPProbe(*timeout, flag.Args()...)
+	probe.Run(*timeout, flag.Args()...)
 }

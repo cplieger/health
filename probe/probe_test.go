@@ -1,4 +1,4 @@
-package health
+package probe
 
 import (
 	"context"
@@ -24,7 +24,7 @@ func statusServer(t *testing.T, status int) *httptest.Server {
 	return srv
 }
 
-func TestProbeHTTP_statusTable(t *testing.T) {
+func TestURL_statusTable(t *testing.T) {
 	tests := []struct {
 		name    string
 		status  int
@@ -40,28 +40,28 @@ func TestProbeHTTP_statusTable(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := statusServer(t, tc.status)
-			err := ProbeHTTP(t.Context(), srv.URL)
+			err := URL(t.Context(), srv.URL)
 			if (err != nil) != tc.wantErr {
-				t.Errorf("ProbeHTTP(status %d) error = %v, wantErr %v", tc.status, err, tc.wantErr)
+				t.Errorf("URL(status %d) error = %v, wantErr %v", tc.status, err, tc.wantErr)
 			}
 		})
 	}
 }
 
-// TestProbeHTTP_statusErrorNamesCode pins that a non-2xx failure names the
+// TestURL_statusErrorNamesCode pins that a non-2xx failure names the
 // received status, so a HEALTHCHECK log line is diagnosable on its own.
-func TestProbeHTTP_statusErrorNamesCode(t *testing.T) {
+func TestURL_statusErrorNamesCode(t *testing.T) {
 	srv := statusServer(t, http.StatusServiceUnavailable)
-	err := ProbeHTTP(t.Context(), srv.URL)
+	err := URL(t.Context(), srv.URL)
 	if err == nil {
-		t.Fatal("ProbeHTTP(503) = nil, want error")
+		t.Fatal("URL(503) = nil, want error")
 	}
 	if !strings.Contains(err.Error(), "503") {
 		t.Errorf("error %q does not name the 503 status", err)
 	}
 }
 
-func TestProbeHTTP_followsRedirect(t *testing.T) {
+func TestURL_followsRedirect(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/new", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -72,12 +72,12 @@ func TestProbeHTTP_followsRedirect(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
-	if err := ProbeHTTP(t.Context(), srv.URL+"/old"); err != nil {
-		t.Errorf("ProbeHTTP(redirect to 200) = %v, want nil", err)
+	if err := URL(t.Context(), srv.URL+"/old"); err != nil {
+		t.Errorf("URL(redirect to 200) = %v, want nil", err)
 	}
 }
 
-func TestProbeHTTP_contextDeadline(t *testing.T) {
+func TestURL_contextDeadline(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-r.Context().Done():
@@ -89,36 +89,36 @@ func TestProbeHTTP_contextDeadline(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
 	defer cancel()
-	err := ProbeHTTP(ctx, srv.URL)
+	err := URL(ctx, srv.URL)
 	if err == nil {
-		t.Fatal("ProbeHTTP(hung endpoint) = nil, want deadline error")
+		t.Fatal("URL(hung endpoint) = nil, want deadline error")
 	}
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("error = %v, want errors.Is(..., context.DeadlineExceeded)", err)
 	}
 }
 
-func TestProbeHTTP_connectionRefused(t *testing.T) {
+func TestURL_connectionRefused(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {}))
 	url := srv.URL
 	srv.Close() // now nothing listens there
 
-	if err := ProbeHTTP(t.Context(), url); err == nil {
-		t.Error("ProbeHTTP(closed server) = nil, want connection error")
+	if err := URL(t.Context(), url); err == nil {
+		t.Error("URL(closed server) = nil, want connection error")
 	}
 }
 
-func TestProbeHTTP_invalidURL(t *testing.T) {
-	if err := ProbeHTTP(t.Context(), "://not-a-url"); err == nil {
-		t.Error("ProbeHTTP(invalid URL) = nil, want build-request error")
+func TestURL_invalidURL(t *testing.T) {
+	if err := URL(t.Context(), "://not-a-url"); err == nil {
+		t.Error("URL(invalid URL) = nil, want build-request error")
 	}
 }
 
-// TestProbeHTTP_statusBoundary property-checks the 2xx decision across the
+// TestURL_statusBoundary property-checks the 2xx decision across the
 // whole plausible status range: exactly [200,299] is healthy, everything
 // else (including 3xx responses without a Location header, which the
 // client does not follow) is unhealthy.
-func TestProbeHTTP_statusBoundary(t *testing.T) {
+func TestURL_statusBoundary(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		code, err := strconv.Atoi(strings.TrimPrefix(r.URL.Path, "/"))
 		if err != nil {
@@ -130,7 +130,7 @@ func TestProbeHTTP_statusBoundary(t *testing.T) {
 
 	rapid.Check(t, func(rt *rapid.T) {
 		code := rapid.IntRange(200, 599).Draw(rt, "status")
-		err := ProbeHTTP(context.Background(), fmt.Sprintf("%s/%d", srv.URL, code))
+		err := URL(context.Background(), fmt.Sprintf("%s/%d", srv.URL, code))
 		healthy := code <= 299
 		if healthy != (err == nil) {
 			rt.Fatalf("status %d: err = %v, want healthy=%v", code, err, healthy)
@@ -138,12 +138,12 @@ func TestProbeHTTP_statusBoundary(t *testing.T) {
 	})
 }
 
-func TestHTTPProbeCheck_allHealthy(t *testing.T) {
+func TestCheck_allHealthy(t *testing.T) {
 	a := statusServer(t, http.StatusOK)
 	b := statusServer(t, http.StatusNoContent)
 
 	var out strings.Builder
-	code := HTTPProbeCheck(&out, DefaultHTTPProbeTimeout, a.URL, b.URL)
+	code := Check(&out, DefaultTimeout, a.URL, b.URL)
 	if code != 0 {
 		t.Errorf("code = %d, want 0", code)
 	}
@@ -152,12 +152,12 @@ func TestHTTPProbeCheck_allHealthy(t *testing.T) {
 	}
 }
 
-func TestHTTPProbeCheck_oneFailureNamesOnlyThatURL(t *testing.T) {
+func TestCheck_oneFailureNamesOnlyThatURL(t *testing.T) {
 	good := statusServer(t, http.StatusOK)
 	bad := statusServer(t, http.StatusInternalServerError)
 
 	var out strings.Builder
-	code := HTTPProbeCheck(&out, DefaultHTTPProbeTimeout, good.URL, bad.URL)
+	code := Check(&out, DefaultTimeout, good.URL, bad.URL)
 	if code != 1 {
 		t.Errorf("code = %d, want 1", code)
 	}
@@ -169,15 +169,15 @@ func TestHTTPProbeCheck_oneFailureNamesOnlyThatURL(t *testing.T) {
 	}
 }
 
-// TestHTTPProbeCheck_probesAllURLs pins that the check does not stop at the
+// TestCheck_probesAllURLs pins that the check does not stop at the
 // first failure: a multi-surface healthcheck must report every broken
 // surface in one run.
-func TestHTTPProbeCheck_probesAllURLs(t *testing.T) {
+func TestCheck_probesAllURLs(t *testing.T) {
 	bad1 := statusServer(t, http.StatusInternalServerError)
 	bad2 := statusServer(t, http.StatusNotFound)
 
 	var out strings.Builder
-	code := HTTPProbeCheck(&out, DefaultHTTPProbeTimeout, bad1.URL, bad2.URL)
+	code := Check(&out, DefaultTimeout, bad1.URL, bad2.URL)
 	if code != 1 {
 		t.Errorf("code = %d, want 1", code)
 	}
@@ -188,9 +188,9 @@ func TestHTTPProbeCheck_probesAllURLs(t *testing.T) {
 	}
 }
 
-func TestHTTPProbeCheck_noURLs(t *testing.T) {
+func TestCheck_noURLs(t *testing.T) {
 	var out strings.Builder
-	code := HTTPProbeCheck(&out, DefaultHTTPProbeTimeout)
+	code := Check(&out, DefaultTimeout)
 	if code != 1 {
 		t.Errorf("code = %d, want 1 (empty probe must not report healthy)", code)
 	}
@@ -199,11 +199,11 @@ func TestHTTPProbeCheck_noURLs(t *testing.T) {
 	}
 }
 
-func TestHTTPProbeCheck_nonPositiveTimeout(t *testing.T) {
+func TestCheck_nonPositiveTimeout(t *testing.T) {
 	srv := statusServer(t, http.StatusOK)
 
 	var out strings.Builder
-	code := HTTPProbeCheck(&out, 0, srv.URL)
+	code := Check(&out, 0, srv.URL)
 	if code != 1 {
 		t.Errorf("code = %d, want 1 (non-positive timeout fails immediately)", code)
 	}
