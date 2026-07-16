@@ -63,7 +63,7 @@ func main() {
 ## Degraded mode is load-bearing — mind the divergence
 
 `NewMarker` probes the marker's parent directory for writability at
-construction (via `probeHealthDir`, exported as `ProbeDir`). When the
+construction (via the internal `probeHealthDir` writability probe). When the
 directory is not writable — typically a compose service with
 `read_only: true` and no `tmpfs: /tmp` mount — the marker enters
 **degraded mode**: it logs one `Warn` with a fix hint, and `Set`/`Cleanup`
@@ -107,9 +107,6 @@ The whole surface is small enough to enumerate; keep it that way.
 - `RunProbe(path string)` — probe-process entry point; calls `os.Exit`.
 - `ProbeCheck(path string) int` — the same decision without `os.Exit`, so
   it is unit-testable (0 = healthy or degraded, 1 = unhealthy).
-- `ProbeDir(path string) error` — the exported directory-writability probe,
-  so consumers and their tests assert the degraded-mode condition without
-  copying it.
 - `Handler(s Signal) http.Handler` — optional JSON endpoint for K8s HTTP
   probes; 200 `{"status":"OK",...}` when healthy, 503
   `{"status":"Unavailable",...}` otherwise. A nil `Signal` always reports 503.

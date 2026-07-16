@@ -221,16 +221,6 @@ func probeCheck(path string) (code int, reason string) {
 	return 1, "unhealthy: marker stat failed: " + statErr.Error()
 }
 
-// ProbeDir reports whether the marker's parent directory is writable by
-// creating and deleting a temp file: nil when writable, the underlying
-// error otherwise. This is the exact check NewMarker and ProbeCheck use
-// internally to decide degraded mode; it is exported so consumers (and
-// their tests) can assert marker-directory writability without copying
-// the probe into their own package.
-func ProbeDir(path string) error {
-	return probeHealthDir(path)
-}
-
 // --- helpers ---
 
 // warnFailure logs a filesystem-op failure once per distinct (message,
