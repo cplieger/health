@@ -207,27 +207,26 @@ func TestHealthMarker_Healthy(t *testing.T) {
 	}
 }
 
-// TestProbeDir_Writable confirms the exported ProbeDir succeeds on a
-// writable dir and leaves no artifact behind (mirrors the internal
-// probeHealthDir test, via the public wrapper consumers use).
-func TestProbeDir_Writable(t *testing.T) {
+// TestProbeHealthDir_Writable confirms the writability probe succeeds on
+// a writable dir and leaves no artifact behind.
+func TestProbeHealthDir_Writable(t *testing.T) {
 	dir := t.TempDir()
-	if err := ProbeDir(filepath.Join(dir, ".healthy")); err != nil {
-		t.Fatalf("ProbeDir on writable dir: %v", err)
+	if err := probeHealthDir(filepath.Join(dir, ".healthy")); err != nil {
+		t.Fatalf("probeHealthDir on writable dir: %v", err)
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatalf("readdir: %v", err)
 	}
 	if len(entries) != 0 {
-		t.Fatalf("ProbeDir left artifacts behind: %v", entries)
+		t.Fatalf("probeHealthDir left artifacts behind: %v", entries)
 	}
 }
 
-// TestProbeDir_NonExistent confirms a missing parent directory is
+// TestProbeHealthDir_NonExistent confirms a missing parent directory is
 // reported as an error rather than masked.
-func TestProbeDir_NonExistent(t *testing.T) {
-	if err := ProbeDir(filepath.Join(t.TempDir(), "nope", ".healthy")); err == nil {
+func TestProbeHealthDir_NonExistent(t *testing.T) {
+	if err := probeHealthDir(filepath.Join(t.TempDir(), "nope", ".healthy")); err == nil {
 		t.Fatal("expected error for non-existent parent dir")
 	}
 }
