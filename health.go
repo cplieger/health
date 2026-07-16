@@ -36,6 +36,11 @@
 //     unwritable (full tmpfs), and a failed Set(false) that leaves the marker
 //     present, are both reported healthy by the probe, matching the
 //     degraded-mode rationale above.
+//   - By default the probe checks existence only; staleness belongs to
+//     Docker's --interval at the orchestrator level. Apps whose resident
+//     loop refreshes the marker each cycle can opt into a freshness
+//     deadline with WithMaxAge, under which a wedged loop (marker present
+//     but old) probes unhealthy. See WithMaxAge for when not to arm it.
 //
 // Logging goes through slog.Default(); configure it via slog.SetDefault
 // in main before constructing a Marker.
@@ -52,6 +57,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sync"
+	"time"
 )
 
 // Signal is the interface satisfied by *Marker. Consumers (e.g.
@@ -181,15 +187,46 @@ func (m *Marker) Healthy() bool {
 	return err == nil
 }
 
+// ProbeOption configures the probe-side health decision (RunProbe and
+// ProbeCheck). Without options the probe checks marker existence only.
+type ProbeOption func(*probeConfig)
+
+// probeConfig holds the probe-side knobs collected from ProbeOptions.
+type probeConfig struct {
+	maxAge time.Duration
+}
+
+// WithMaxAge arms an opt-in freshness deadline: a marker older than d
+// is unhealthy (exit 1), turning the signal from a level ("the app
+// last reported healthy") into a lease ("the app recently proved
+// progress"). The writing side needs no new calls: every Set(true)
+// refreshes the marker's mtime, so an app that already calls Set(true)
+// once per work cycle gets heartbeat semantics by passing this option
+// to RunProbe in its health subcommand.
+//
+// Arm it only where the resident process runs its own bounded work
+// cycle at a known cadence, so a stale marker means a wedged loop that
+// a restart fixes. Do NOT arm it for externally-triggered apps (a
+// separate docker exec writes the marker): an idle resident between
+// triggers is healthy, and restarting it cannot fix a trigger that
+// stopped firing. Marker.Healthy (and therefore Handler) stays
+// existence-based regardless of this option.
+//
+// A non-positive d disables the deadline (same as omitting the option).
+func WithMaxAge(d time.Duration) ProbeOption {
+	return func(c *probeConfig) { c.maxAge = d }
+}
+
 // RunProbe runs in the separate `health` subcommand process. It exits
-// 0 if the marker is present or the marker directory is unwritable
-// (degraded mode: the long-running process cannot signal through the
-// filesystem, so the probe falls back to "alive"). It exits 1 when
-// the marker is absent from a writable directory, which is the real
-// unhealthy signal; the stderr diagnostic names the underlying stat
-// failure when the cause is something other than absence.
-func RunProbe(path string) {
-	code, reason := probeCheck(path)
+// 0 if the marker is present (and fresh, when WithMaxAge is armed) or
+// the marker directory is unwritable (degraded mode: the long-running
+// process cannot signal through the filesystem, so the probe falls
+// back to "alive"). It exits 1 when the marker is absent from a
+// writable directory or stale past an armed deadline, which are the
+// real unhealthy signals; the stderr diagnostic names the underlying
+// stat failure when the cause is something other than absence.
+func RunProbe(path string, opts ...ProbeOption) {
+	code, reason := probeCheck(path, opts...)
 	if code != 0 {
 		fmt.Fprintln(os.Stderr, reason)
 	}
@@ -199,18 +236,28 @@ func RunProbe(path string) {
 // ProbeCheck implements the health-probe decision without calling
 // os.Exit, so it can be unit-tested. Returns 0 for healthy or
 // degraded, 1 for unhealthy.
-func ProbeCheck(path string) int {
-	code, _ := probeCheck(path)
+func ProbeCheck(path string, opts ...ProbeOption) int {
+	code, _ := probeCheck(path, opts...)
 	return code
 }
 
 // probeCheck carries the shared probe decision plus the operator-facing
 // diagnostic for the unhealthy exit: "marker absent" for the common
-// ENOENT case, the underlying stat error for anything else (permission,
-// symlink loop, I/O), so RunProbe does not mislabel those as absence.
-func probeCheck(path string) (code int, reason string) {
-	_, statErr := os.Stat(path) // #nosec G703 -- trusted caller-supplied marker path, existence check only
+// ENOENT case, a stale-age line when an armed WithMaxAge deadline is
+// exceeded, and the underlying stat error for anything else
+// (permission, symlink loop, I/O), so RunProbe does not mislabel those
+// as absence.
+func probeCheck(path string, opts ...ProbeOption) (code int, reason string) {
+	var cfg probeConfig
+	for _, o := range opts {
+		o(&cfg)
+	}
+	info, statErr := os.Stat(path) // #nosec G703 -- trusted caller-supplied marker path, existence check only
 	if statErr == nil {
+		if age := time.Since(info.ModTime()); cfg.maxAge > 0 && age > cfg.maxAge {
+			return 1, fmt.Sprintf("unhealthy: marker stale: %s old exceeds max-age %s",
+				age.Truncate(time.Second), cfg.maxAge)
+		}
 		return 0, ""
 	}
 	if err := probeHealthDir(path); err != nil {
@@ -255,7 +302,9 @@ func (m *Marker) recordState(ok bool) (recovered bool) {
 }
 
 // writeMarker atomically touches the marker file. A fresh os.Create is
-// sufficient; the file is empty and the healthcheck only tests existence.
+// sufficient: the file is empty, and O_TRUNC on an existing file
+// refreshes its mtime, which is the contract an armed WithMaxAge
+// deadline reads. TestHealthMarker_SetTrue_refreshesMtime pins it.
 func writeMarker(path string) error {
 	f, err := os.Create(path) // #nosec G304 -- caller-supplied trusted path
 	if err != nil {

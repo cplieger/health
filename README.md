@@ -59,6 +59,32 @@ if len(os.Args) > 1 && os.Args[1] == "health" {
 > job-exec block. A mismatched exec user fails the marker write with
 > permission denied, and only the health signal is lost, silently.
 
+### Freshness deadline (opt-in)
+
+By default the probe checks existence only, and staleness stays owned by
+Docker's `--interval`. That check has a blind spot: once `Set(true)` has run,
+a deadlocked process keeps passing every probe. An app whose resident loop
+already calls `Set(true)` once per work cycle can arm a deadline, turning
+those calls into heartbeats — a marker older than the deadline probes
+unhealthy and Docker restarts the container:
+
+```go
+if len(os.Args) > 1 && os.Args[1] == "health" {
+    health.RunProbe(health.DefaultPath, health.WithMaxAge(3*interval))
+}
+```
+
+Every `Set(true)` refreshes the marker's mtime, so the writing side needs no
+changes. Pick a max-age comfortably above one cycle interval plus the worst
+normal cycle duration (3× the interval is a sane default).
+
+Arm it only where the resident process runs its own bounded work cycle at a
+known cadence, so a stale marker means a wedged loop that a restart fixes. Do
+NOT arm it for externally-triggered apps (a separate `docker exec` writes the
+marker): an idle resident between triggers is healthy, and restarting it
+cannot fix a trigger that stopped firing. `Healthy()` and `Handler` stay
+existence-based regardless.
+
 ### HTTP probe (wrapped third-party servers)
 
 For images whose main process is not your code — so nothing can touch a
@@ -131,8 +157,9 @@ Response (503 Service Unavailable):
 - `(*Marker).Healthy() bool` — stat-based liveness check
 - `Status` — JSON response struct emitted by `Handler` (fields: `Status`, `Timestamp`)
 - `Handler(s Signal) http.Handler` — optional JSON health endpoint
-- `RunProbe(path string)` — probe process entry (calls os.Exit)
-- `ProbeCheck(path string) int` — testable probe logic (0=healthy, 1=unhealthy)
+- `RunProbe(path string, opts ...ProbeOption)` — probe process entry (calls os.Exit)
+- `ProbeCheck(path string, opts ...ProbeOption) int` — testable probe logic (0=healthy, 1=unhealthy)
+- `ProbeOption` / `WithMaxAge(d time.Duration)` — opt-in freshness deadline for the probe side (marker older than `d` is unhealthy; non-positive `d` disables)
 
 In the `github.com/cplieger/health/probe` module:
 
@@ -155,7 +182,7 @@ HEALTHCHECK side of the same connection.
 | Liveness/readiness split            | Docker Compose has one HEALTHCHECK. For K8s, create two `Marker` instances with different paths.                                                          |
 | Graceful shutdown / context.Context | `Cleanup()` is the shutdown action. No background goroutines exist to cancel.                                                                             |
 | Status-change callbacks             | State transitions are logged via slog. Wrap `Set()` for custom callbacks.                                                                                 |
-| Marker staleness / mtime checks     | Docker's `--interval`/`--timeout` handle staleness at the orchestrator level.                                                                             |
+| Default staleness checking          | Existence-only remains the default; Docker's `--interval` owns cadence. Freshness is opt-in per app via `WithMaxAge` (see above), never global.           |
 | Prometheus metrics                  | Trivially added by consumers: `prometheus.NewGaugeFunc(opts, func() float64 { ... })`.                                                                    |
 | Custom marker content               | The pattern's elegance is `os.Stat` — no parsing, no format versioning.                                                                                   |
 
