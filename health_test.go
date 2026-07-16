@@ -156,6 +156,28 @@ func TestProbeCheck_degraded(t *testing.T) {
 	}
 }
 
+// TestProbeCheck_statFailure_diagnostic pins the unhealthy-reason
+// classification: a stat failure that is not ENOENT (here a symlink
+// loop in a writable dir) must exit 1 with a diagnostic naming the
+// stat error, not the misleading "marker absent".
+func TestProbeCheck_statFailure_diagnostic(t *testing.T) {
+	loop := filepath.Join(t.TempDir(), ".healthy")
+	if err := os.Symlink(loop, loop); err != nil {
+		t.Skipf("cannot create self-referencing symlink: %v", err)
+	}
+
+	code, reason := probeCheck(loop)
+	if code != 1 {
+		t.Fatalf("probeCheck(symlink loop) = %d, want 1", code)
+	}
+	if !strings.Contains(reason, "marker stat failed") {
+		t.Errorf("reason = %q, want it to name the stat failure", reason)
+	}
+	if strings.Contains(reason, "marker absent") {
+		t.Errorf("reason = %q, must not claim absence for a non-ENOENT stat failure", reason)
+	}
+}
+
 // TestHealthMarker_Healthy covers the Healthy() method so consumers can
 // use *Marker via the Signal interface. The method checks
 // marker-file presence via strict os.Stat.

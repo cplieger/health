@@ -185,11 +185,12 @@ func (m *Marker) Healthy() bool {
 // (degraded mode: the long-running process cannot signal through the
 // filesystem, so the probe falls back to "alive"). It exits 1 when
 // the marker is absent from a writable directory, which is the real
-// unhealthy signal.
+// unhealthy signal; the stderr diagnostic names the underlying stat
+// failure when the cause is something other than absence.
 func RunProbe(path string) {
-	code := ProbeCheck(path)
+	code, reason := probeCheck(path)
 	if code != 0 {
-		fmt.Fprintln(os.Stderr, "unhealthy: marker absent")
+		fmt.Fprintln(os.Stderr, reason)
 	}
 	os.Exit(code)
 }
@@ -198,13 +199,26 @@ func RunProbe(path string) {
 // os.Exit, so it can be unit-tested. Returns 0 for healthy or
 // degraded, 1 for unhealthy.
 func ProbeCheck(path string) int {
-	if _, err := os.Stat(path); err == nil { // #nosec G703 -- trusted caller-supplied marker path, existence check only
-		return 0
+	code, _ := probeCheck(path)
+	return code
+}
+
+// probeCheck carries the shared probe decision plus the operator-facing
+// diagnostic for the unhealthy exit: "marker absent" for the common
+// ENOENT case, the underlying stat error for anything else (permission,
+// symlink loop, I/O), so RunProbe does not mislabel those as absence.
+func probeCheck(path string) (code int, reason string) {
+	_, statErr := os.Stat(path) // #nosec G703 -- trusted caller-supplied marker path, existence check only
+	if statErr == nil {
+		return 0, ""
 	}
 	if err := probeHealthDir(path); err != nil {
-		return 0
+		return 0, ""
 	}
-	return 1
+	if errors.Is(statErr, fs.ErrNotExist) {
+		return 1, "unhealthy: marker absent"
+	}
+	return 1, "unhealthy: marker stat failed: " + statErr.Error()
 }
 
 // ProbeDir reports whether the marker's parent directory is writable by
