@@ -48,6 +48,13 @@ if len(os.Args) > 1 && os.Args[1] == "health" {
 }
 ```
 
+> **External triggers and file ownership:** the marker belongs to whoever
+> created it. If a separate `docker exec` process updates it (a job scheduler
+> invoking your binary's `run`/`sync` subcommand), run that exec as the same
+> UID as the container's main process, e.g. `user = 568:568` in an Ofelia
+> job-exec block. A mismatched exec user fails the marker write with
+> permission denied, and only the health signal is lost, silently.
+
 ### HTTP probe (wrapped third-party servers)
 
 For images whose main process is not your code — so nothing can touch a
