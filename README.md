@@ -57,7 +57,11 @@ if len(os.Args) > 1 && os.Args[1] == "health" {
 > invoking your binary's `run`/`sync` subcommand), run that exec as the same
 > UID as the container's main process, e.g. `user = 568:568` in an Ofelia
 > job-exec block. A mismatched exec user fails the marker write with
-> permission denied, and only the health signal is lost, silently.
+> permission denied, and only the health signal is lost — silently under
+> `Set`. A subcommand whose exit code an external scheduler alerts on can
+> make that loss loud instead: call `SetChecked` and propagate the returned
+> error into the exit code, so the scheduler's job fails rather than losing
+> the heartbeat invisibly.
 
 ### Freshness deadline (opt-in)
 
@@ -152,7 +156,8 @@ Response (503 Service Unavailable):
 - `Signal` — interface with `Healthy() bool`
 - `Marker` — main type; implements `Signal`
 - `NewMarker(path string) *Marker` — constructor (probes dir writability)
-- `(*Marker).Set(ok bool)` — touch or remove marker
+- `(*Marker).Set(ok bool)` — touch or remove marker (failures logged and swallowed)
+- `(*Marker).SetChecked(ok bool) error` — `Set` with the filesystem outcome reported; nil in degraded mode (the marker channel is deliberately inert there, so callers don't turn a compose misconfiguration into an alert loop)
 - `(*Marker).Cleanup()` — remove marker on shutdown
 - `(*Marker).Healthy() bool` — stat-based liveness check
 - `Status` — JSON response struct emitted by `Handler` (fields: `Status`, `Timestamp`)
