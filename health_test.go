@@ -833,3 +833,91 @@ func TestHealthMarker_SetFailureWarnDedupAlternatingBranches(t *testing.T) {
 		t.Errorf("want exactly 1 remove-failure Warn in one streak, got %d\nlog:\n%s", got, log)
 	}
 }
+
+// TestHealthMarker_SetChecked pins the checked variant's return contract:
+// nil on a successful touch/remove, the underlying error on a filesystem
+// failure, and nil again once the blocker clears (recovery), with the file
+// state matching Set's semantics throughout.
+func TestHealthMarker_SetChecked(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".healthy")
+	m := NewMarker(path)
+	if m.degraded {
+		t.Skip("parent dir not writable in this environment; skipping")
+	}
+
+	if err := m.SetChecked(true); err != nil {
+		t.Fatalf("SetChecked(true) on writable dir = %v, want nil", err)
+	}
+	if !m.Healthy() {
+		t.Fatal("marker should exist after successful SetChecked(true)")
+	}
+	if err := m.SetChecked(false); err != nil {
+		t.Fatalf("SetChecked(false) = %v, want nil", err)
+	}
+
+	// Block the write: the marker path becomes a directory, so os.Create fails.
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatalf("mkdir marker-as-dir: %v", err)
+	}
+	if err := m.SetChecked(true); err == nil {
+		t.Fatal("SetChecked(true) on blocked path = nil, want the create error")
+	}
+
+	// Clear the blocker: the next call succeeds and reports nil.
+	if err := os.Remove(path); err != nil {
+		t.Fatalf("remove blocking dir: %v", err)
+	}
+	if err := m.SetChecked(true); err != nil {
+		t.Fatalf("SetChecked(true) after recovery = %v, want nil", err)
+	}
+}
+
+// TestHealthMarker_SetChecked_removeFailure covers the remove branch: a
+// non-empty directory at the marker path fails os.Remove with a
+// non-ErrNotExist error, which SetChecked must surface.
+func TestHealthMarker_SetChecked_removeFailure(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".healthy")
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatalf("mkdir marker-as-dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(path, "child"), nil, 0o600); err != nil {
+		t.Fatalf("write child: %v", err)
+	}
+
+	m := NewMarker(path)
+	if m.degraded {
+		t.Skip("parent dir not writable in this environment; skipping")
+	}
+
+	if err := m.SetChecked(false); err == nil {
+		t.Fatal("SetChecked(false) on non-empty dir = nil, want the remove error")
+	}
+}
+
+// TestHealthMarker_SetChecked_degradedReturnsNil pins the degraded-mode
+// contract: the marker channel is deliberately inert, so SetChecked reports
+// nil rather than handing callers an error that would turn a compose
+// misconfiguration into a restart/alert loop.
+func TestHealthMarker_SetChecked_degradedReturnsNil(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "ro")
+	if err := os.Mkdir(dir, 0o500); err != nil {
+		t.Fatalf("mkdir ro: %v", err)
+	}
+	path := filepath.Join(dir, ".healthy")
+	m := NewMarker(path)
+	if !m.degraded {
+		t.Skip("test environment bypasses directory mode; skipping")
+	}
+
+	if err := m.SetChecked(true); err != nil {
+		t.Errorf("SetChecked(true) in degraded mode = %v, want nil", err)
+	}
+	if err := m.SetChecked(false); err != nil {
+		t.Errorf("SetChecked(false) in degraded mode = %v, want nil", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("degraded SetChecked should never create the file: %v", err)
+	}
+}

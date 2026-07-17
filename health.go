@@ -111,22 +111,37 @@ func NewMarker(path string) *Marker {
 // Set records the current liveness state and touches or removes the
 // marker accordingly. Edge transitions (true↔false) are logged; repeated
 // calls with the same value are silent. Safe to call from any goroutine.
-// In degraded mode Set is a no-op.
-func (m *Marker) Set(ok bool) {
+// In degraded mode Set is a no-op. A filesystem failure is logged and
+// swallowed; use SetChecked to observe it programmatically.
+func (m *Marker) Set(ok bool) { _ = m.SetChecked(ok) }
+
+// SetChecked is Set with the filesystem outcome reported: it returns nil
+// when the marker now reflects ok, and the underlying error when the
+// touch or remove failed (the same failure Set logs and swallows, so no
+// extra log line is emitted). It exists for callers whose own success
+// contract includes the marker write — e.g. a one-shot scan subcommand
+// whose exit code an external scheduler alerts on, where a silently lost
+// heartbeat should fail the invocation loudly instead. In degraded mode
+// it returns nil: the marker channel is deliberately inert there (see
+// the package doc's failure modes), and propagating an error would turn
+// a compose misconfiguration into the restart or alert loop the degraded
+// design exists to avoid.
+func (m *Marker) SetChecked(ok bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.degraded {
-		return
+		return nil
 	}
 
 	changed := !m.known || m.healthy != ok
 	if msg, err := m.applyState(ok); err != nil {
 		m.warnFailure(msg, err)
-		return
+		return err
 	}
 	if recovered := m.recordState(ok); changed || recovered {
 		logHealthState(ok)
 	}
+	return nil
 }
 
 // applyState performs the branch-specific filesystem operation for Set:
