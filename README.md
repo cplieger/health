@@ -102,14 +102,19 @@ RUN CGO_ENABLED=0 GOBIN=/out go install github.com/cplieger/health/probe/cmd/pro
 FROM gcr.io/distroless/static-debian12
 COPY --from=probe /out/probe /probe
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-    CMD ["/probe", "http://127.0.0.1:2019/config/"]
+    CMD ["/probe", "-timeout", "4s", "http://127.0.0.1:2019/config/"]
 ```
+
+Keep the probe's `-timeout` strictly below Docker's `--timeout`: the probe
+needs the margin to expire its budget, write the per-URL failure line to
+stderr, and exit 1 before Docker force-kills the check (a killed check
+still counts as failed, but the diagnostic is lost).
 
 Multiple URLs probe multiple surfaces in one run (all must answer 2xx
 within one shared `-timeout` budget, default 5s):
 
 ```dockerfile
-CMD ["/probe", "http://127.0.0.1:80/health", "http://127.0.0.1:2019/config/"]
+CMD ["/probe", "-timeout", "4s", "http://127.0.0.1:80/health", "http://127.0.0.1:2019/config/"]
 ```
 
 Exit codes: 0 all healthy, 1 any probe failed (each failure written to
