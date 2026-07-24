@@ -12,10 +12,10 @@ marker file instead of a shell, `curl`, or an open port. Distroless images
 have nothing to run inside a Docker `HEALTHCHECK`, so the binary plays two
 roles against the same file at `DefaultPath` (`/tmp/.healthy`):
 
-- **Main process** — owns a `*Marker`, calls `Set(true)` once ready,
+- **Main process:** owns a `*Marker`, calls `Set(true)` once ready,
   `Set(false)` when not, and `defer m.Cleanup()` on shutdown. `Set` touches
   or removes the marker file.
-- **Probe process** — the same binary re-invoked with a `health`
+- **Probe process:** the same binary re-invoked with a `health`
   subcommand. It stats the marker and exits 0 (healthy) or 1 (unhealthy)
   via `RunProbe`.
 
@@ -61,12 +61,12 @@ func main() {
 }
 ```
 
-## Degraded mode is load-bearing — mind the divergence
+## Degraded mode is load-bearing: mind the divergence
 
 `NewMarker` probes the marker's parent directory for writability at
-construction (via the internal `probeHealthDir` writability probe). When the
-directory is not writable — typically a compose service with
-`read_only: true` and no `tmpfs: /tmp` mount — the marker enters
+construction (via the internal `probeHealthDir` probe). When the
+directory is not writable (typically a compose service with
+`read_only: true` and no `tmpfs: /tmp` mount), the marker enters
 **degraded mode**: it logs one `Warn` with a fix hint, and `Set`/`Cleanup`
 become no-ops. Callers never branch on the result.
 
@@ -81,14 +81,14 @@ mode, and both behaviors are deliberate:
   strict `os.Stat` and returns **false** in degraded mode, because HTTP
   consumers deserve an honest signal.
 
-If you find yourself "fixing" this divergence so the two agree, stop — it
+If you find yourself "fixing" this divergence so the two agree, stop; it
 is the design. The reasoning lives in the package doc comment and the
 `Healthy` / `ProbeCheck` doc comments; update those together if the
 behavior ever legitimately changes.
 
-## Unsupported by design — a binding contract
+## Unsupported by Design: a binding contract
 
-The "[Unsupported by design](README.md#unsupported-by-design)" table in
+The "[Unsupported by Design](README.md#unsupported-by-design)" table in
 `README.md` lists deliberate non-features, not a TODO list. This library
 complements HTTP-based health libraries (hellofresh/health-go,
 alexliesenfeld/health) rather than competing with them.
@@ -100,34 +100,34 @@ quality. If you think a non-goal should change, open an issue first.
 
 The whole surface is small enough to enumerate; keep it that way.
 
-- `DefaultPath` — default marker path (`/tmp/.healthy`).
-- `Signal` — interface with `Healthy() bool`; `*Marker` satisfies it (a
+- `DefaultPath`: default marker path (`/tmp/.healthy`).
+- `Signal`: interface with `Healthy() bool`; `*Marker` satisfies it (a
   compile-time assertion guards this).
-- `Marker` — main type. `NewMarker(path) *Marker`, `Set(ok bool)`,
-  `Cleanup()`, `Healthy() bool`.
-- `RunProbe(path string, opts ...ProbeOption)` — probe-process entry point;
+- `Marker`: main type. `NewMarker(path) *Marker`, `Set(ok bool)`,
+  `SetChecked(ok bool) error`, `Cleanup()`, `Healthy() bool`.
+- `RunProbe(path string, opts ...ProbeOption)`: probe-process entry point;
   calls `os.Exit`.
-- `ProbeCheck(path string, opts ...ProbeOption) int` — the same decision
+- `ProbeCheck(path string, opts ...ProbeOption) int`: the same decision
   without `os.Exit`, so it is unit-testable (0 = healthy or degraded,
   1 = unhealthy).
-- `ProbeOption` / `WithMaxAge(d)` — opt-in probe-side freshness deadline: a
+- `ProbeOption` / `WithMaxAge(d)`: opt-in probe-side freshness deadline: a
   marker older than `d` is unhealthy. Every `Set(true)` refreshes the
   marker's mtime (pinned by test), so per-cycle `Set(true)` calls are the
   heartbeat. Existence-only stays the default; never arm it for
   externally-triggered apps.
-- `Handler(s Signal) http.Handler` — optional JSON endpoint for K8s HTTP
+- `Handler(s Signal) http.Handler`: optional JSON endpoint for K8s HTTP
   probes; 200 `{"status":"OK",...}` when healthy, 503
   `{"status":"Unavailable",...}` otherwise. A nil `Signal` always reports 503.
-- `Status` — the JSON response struct (`Status`, `Timestamp`) emitted by
+- `Status`: the JSON response struct (`Status`, `Timestamp`) emitted by
   `Handler`.
+
 In the `github.com/cplieger/health/probe` nested module:
 
-- `probe.DefaultTimeout` — default shared budget for one HTTP probe run
-  (5s, matching the BusyBox-wget recipes the probe replaces).
-- `probe.URL(ctx, url) error` — single HTTP liveness GET (2xx = nil).
-- `probe.Check(w, timeout, urls...) int` — testable multi-URL probe
+- `probe.DefaultTimeout`: default shared budget for one HTTP probe run (5s).
+- `probe.URL(ctx, url) error`: single HTTP liveness GET (2xx = nil).
+- `probe.Check(w, timeout, urls...) int`: testable multi-URL probe
   (0 = all healthy, 1 otherwise; probes all URLs; zero URLs is unhealthy).
-- `probe.Run(timeout, urls...)` — probe-process entry point; calls
+- `probe.Run(timeout, urls...)`: probe-process entry point; calls
   `os.Exit`. `probe/cmd/probe` is the flag-parsing binary around it.
 
 ## Local development
@@ -194,26 +194,26 @@ gremlins unleash .
 
 ## Test layout
 
-Tests live beside the code (standard Go layout), split by intent — match
+Tests live beside the code (standard Go layout), split by intent; match
 the right file when adding cases:
 
-- `health_test.go` — marker lifecycle, degraded mode, idempotency, the
+- `health_test.go`: marker lifecycle, degraded mode, idempotency, the
   `rapid` property test (arbitrary `Set` sequences converge to the last
   value), probe-dir checks, and the concurrent race test.
-- `handler_test.go` — HTTP handler status codes and JSON shape (defines the
+- `handler_test.go`: HTTP handler status codes and JSON shape (defines the
   shared `stubSignal`).
-- `httpprobe_test.go` — HTTP probe status table, the `rapid` status-boundary
+- `probe/probe_test.go`: HTTP probe status table, the `rapid` status-boundary
   property (exactly [200,299] is healthy), redirect/timeout/refused paths,
   and the multi-URL aggregate (probes-all, names-failing-URL, zero-URLs).
-- `handler_fuzz_test.go` — `FuzzHandlerSignal`; `health_fuzz_test.go` —
+- `handler_fuzz_test.go`: `FuzzHandlerSignal`; `health_fuzz_test.go`:
   `FuzzProbeCheck`.
-- `example_test.go` — runnable `Example` / `ExampleProbeCheck` functions
+- `example_test.go`: runnable `Example` / `ExampleProbeCheck` functions
   that double as documentation; keep their `// Output:` blocks correct.
-- `bench_test.go` — allocation/throughput benchmarks.
+- `bench_test.go`: allocation/throughput benchmarks.
 
 The degraded-mode tests `t.Skip` when the environment bypasses directory
 mode (root, or permissive filesystems like Windows), so a green run on such
-a host does not exercise that path — verify degraded-mode changes on Linux.
+a host does not exercise that path; verify degraded-mode changes on Linux.
 
 ## Commits and PRs
 
@@ -229,5 +229,5 @@ changelog line a consumer would read.
 By participating you agree to the org-wide
 [Code of Conduct](https://github.com/cplieger/.github/blob/main/CODE_OF_CONDUCT.md).
 Report security issues through the
-[security policy](https://github.com/cplieger/.github/blob/main/SECURITY.md) —
+[security policy](https://github.com/cplieger/.github/blob/main/SECURITY.md),
 never in a public issue.

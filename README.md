@@ -11,12 +11,12 @@
 
 A standalone Go library for Docker healthchecks in containers that lack a shell. Two modes:
 
-- **File marker** — for containers whose main process is your own Go binary. The running process touches/removes a marker file; the probe process (re-invoked binary) stats it. Handles degraded mode (read-only filesystem) gracefully.
-- **HTTP probe** — for containers wrapping a third-party server (Caddy, an upstream daemon) that cannot cooperate with a marker but already exposes an HTTP endpoint whose reachability is the health signal. Ships as its own nested module, [`github.com/cplieger/health/probe`](probe/), with `probe/cmd/probe` as the ready-made static binary to bake into the image.
+- **File marker:** for containers whose main process is your own Go binary. The running process touches or removes a marker file; the probe process (re-invoked binary) stats it. Handles degraded mode (read-only filesystem) gracefully.
+- **HTTP probe:** for containers wrapping a third-party server (Caddy, an upstream daemon) that cannot cooperate with a marker but already exposes an HTTP endpoint whose reachability is the health signal. Ships as its own nested module, [`github.com/cplieger/health/probe`](probe/), with `probe/cmd/probe` as the ready-made static binary to bake into the image.
 
 When you own the main process, prefer the file marker: `Set(bool)` expresses application state a network GET cannot. Standard library only (test dependency: pgregory.net/rapid).
 
-The two modules version and release independently (`vX.Y.Z` tags for the marker library, `probe/vX.Y.Z` for the probe), so a marker-side release never forces a probe release or vice versa.
+The two modules version and release independently: `vX.Y.Z` tags for the marker library, `probe/vX.Y.Z` for the probe.
 
 ## Install
 
@@ -55,13 +55,12 @@ if len(os.Args) > 1 && os.Args[1] == "health" {
 > **External triggers and file ownership:** the marker belongs to whoever
 > created it. If a separate `docker exec` process updates it (a job scheduler
 > invoking your binary's `run`/`sync` subcommand), run that exec as the same
-> UID as the container's main process, e.g. `user = 568:568` in an Ofelia
+> UID as the container's main process, e.g. the `user` field of an Ofelia
 > job-exec block. A mismatched exec user fails the marker write with
-> permission denied, and only the health signal is lost — silently under
-> `Set`. A subcommand whose exit code an external scheduler alerts on can
-> make that loss loud instead: call `SetChecked` and propagate the returned
-> error into the exit code, so the scheduler's job fails rather than losing
-> the heartbeat invisibly.
+> permission denied; under `Set` the health signal is lost silently. When an
+> external scheduler alerts on the subcommand's exit code, call `SetChecked`
+> and propagate the returned error into the exit code, so the scheduler's
+> job fails instead of losing the heartbeat invisibly.
 
 ### Freshness deadline (opt-in)
 
@@ -69,7 +68,7 @@ By default the probe checks existence only, and staleness stays owned by
 Docker's `--interval`. That check has a blind spot: once `Set(true)` has run,
 a deadlocked process keeps passing every probe. An app whose resident loop
 already calls `Set(true)` once per work cycle can arm a deadline, turning
-those calls into heartbeats — a marker older than the deadline probes
+those calls into heartbeats; a marker older than the deadline probes
 unhealthy and Docker restarts the container:
 
 ```go
@@ -91,8 +90,8 @@ existence-based regardless.
 
 ### HTTP probe (wrapped third-party servers)
 
-For images whose main process is not your code — so nothing can touch a
-marker — bake the standalone probe binary into the image and point it at
+For images whose main process is not your code (so nothing can touch a
+marker), bake the standalone probe binary into the image and point it at
 the endpoint(s) that define liveness:
 
 ```dockerfile
@@ -118,15 +117,12 @@ CMD ["/probe", "-timeout", "4s", "http://127.0.0.1:80/health", "http://127.0.0.1
 ```
 
 Exit codes: 0 all healthy, 1 any probe failed (each failure written to
-stderr, visible in `docker inspect`), 2 usage error. From Go, the same
-logic is `probe.URL(ctx, url)` / `probe.Check(w, timeout, urls...)` /
-`probe.Run(timeout, urls...)` from the
-`github.com/cplieger/health/probe` module.
+stderr, visible in `docker inspect`), 2 usage error.
 
 ### Optional HTTP handler (K8s HTTP probes)
 
 For containers that also expose an HTTP endpoint, the library provides an
-optional `Handler` that emits JSON status — compatible with K8s HTTP liveness
+optional `Handler` that emits JSON status, compatible with K8s HTTP liveness
 probes and mirroring the response shape of hellofresh/health-go:
 
 ```go
@@ -157,32 +153,32 @@ Response (503 Service Unavailable):
 
 ## API
 
-- `DefaultPath` — default marker path (`/tmp/.healthy`)
-- `Signal` — interface with `Healthy() bool`
-- `Marker` — main type; implements `Signal`
-- `NewMarker(path string) *Marker` — constructor (probes dir writability)
-- `(*Marker).Set(ok bool)` — touch or remove marker (failures logged and swallowed)
-- `(*Marker).SetChecked(ok bool) error` — `Set` with the filesystem outcome reported; nil in degraded mode (the marker channel is deliberately inert there, so callers don't turn a compose misconfiguration into an alert loop)
-- `(*Marker).Cleanup()` — remove marker on shutdown
-- `(*Marker).Healthy() bool` — stat-based liveness check
-- `Status` — JSON response struct emitted by `Handler` (fields: `Status`, `Timestamp`)
-- `Handler(s Signal) http.Handler` — optional JSON health endpoint
-- `RunProbe(path string, opts ...ProbeOption)` — probe process entry (calls os.Exit)
-- `ProbeCheck(path string, opts ...ProbeOption) int` — testable probe logic (0=healthy, 1=unhealthy)
-- `ProbeOption` / `WithMaxAge(d time.Duration)` — opt-in freshness deadline for the probe side (marker older than `d` is unhealthy; non-positive `d` disables)
+- `DefaultPath`: default marker path (`/tmp/.healthy`)
+- `Signal`: interface with `Healthy() bool`
+- `Marker`: main type; implements `Signal`
+- `NewMarker(path string) *Marker`: constructor (probes dir writability)
+- `(*Marker).Set(ok bool)`: touch or remove marker (failures logged and swallowed)
+- `(*Marker).SetChecked(ok bool) error`: `Set` with the filesystem outcome reported; deliberately nil in degraded mode, so a compose misconfiguration never becomes an alert loop
+- `(*Marker).Cleanup()`: remove marker on shutdown
+- `(*Marker).Healthy() bool`: stat-based liveness check
+- `Status`: JSON response struct emitted by `Handler` (fields: `Status`, `Timestamp`)
+- `Handler(s Signal) http.Handler`: optional JSON health endpoint
+- `RunProbe(path string, opts ...ProbeOption)`: probe process entry (calls os.Exit)
+- `ProbeCheck(path string, opts ...ProbeOption) int`: testable probe logic (0=healthy or degraded, 1=unhealthy)
+- `ProbeOption` / `WithMaxAge(d time.Duration)`: opt-in freshness deadline for the probe side (marker older than `d` is unhealthy; non-positive `d` disables)
 
 In the `github.com/cplieger/health/probe` module:
 
-- `probe.DefaultTimeout` — default shared budget for one HTTP probe run (5s)
-- `probe.URL(ctx context.Context, url string) error` — single HTTP liveness GET; nil on a 2xx final response
-- `probe.Check(w io.Writer, timeout time.Duration, urls ...string) int` — testable multi-URL probe (0=all healthy, 1 otherwise; probes all URLs, one failure line each; zero URLs is unhealthy)
-- `probe.Run(timeout time.Duration, urls ...string)` — probe process entry (calls os.Exit); `probe/cmd/probe` is the ready-made binary around it
+- `probe.DefaultTimeout`: default shared budget for one HTTP probe run (5s)
+- `probe.URL(ctx context.Context, url string) error`: single HTTP liveness GET; nil on a 2xx final response
+- `probe.Check(w io.Writer, timeout time.Duration, urls ...string) int`: testable multi-URL probe (0=all healthy, 1 otherwise; probes all URLs, one failure line each; zero URLs is unhealthy)
+- `probe.Run(timeout time.Duration, urls ...string)`: probe process entry (calls os.Exit); `probe/cmd/probe` is the ready-made binary around it
 
-## Unsupported by design
+## Unsupported by Design
 
 The following features are deliberately excluded. This library complements
 HTTP-based health libraries (e.g. hellofresh/health-go, alexliesenfeld/health)
-rather than competing with them — those are server-side check frameworks,
+rather than competing with them: those are server-side check frameworks,
 while this library's HTTP probe is a client-side liveness GET for the
 HEALTHCHECK side of the same connection.
 
@@ -194,7 +190,12 @@ HEALTHCHECK side of the same connection.
 | Status-change callbacks             | State transitions are logged via slog. Wrap `Set()` for custom callbacks.                                                                                 |
 | Default staleness checking          | Existence-only remains the default; Docker's `--interval` owns cadence. Freshness is opt-in per app via `WithMaxAge` (see above), never global.           |
 | Prometheus metrics                  | Trivially added by consumers: `prometheus.NewGaugeFunc(opts, func() float64 { ... })`.                                                                    |
-| Custom marker content               | The pattern's elegance is `os.Stat` — no parsing, no format versioning.                                                                                   |
+| Custom marker content               | The pattern's elegance is `os.Stat`: no parsing, no format versioning.                                                                                    |
+
+## Contributing
+
+Issues and PRs are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the
+conventions and how to run the checks locally.
 
 ## Disclaimer
 
@@ -204,4 +205,4 @@ This project was built with AI-assisted tooling using [Claude](https://claude.co
 
 ## License
 
-GPL-3.0 — see [LICENSE](LICENSE).
+GPL-3.0. See [LICENSE](LICENSE).
