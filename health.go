@@ -232,6 +232,131 @@ func WithMaxAge(d time.Duration) ProbeOption {
 	return func(c *probeConfig) { c.maxAge = d }
 }
 
+// MarkerState is what a single look at a health marker found. It is the
+// vocabulary Inspect answers in, and it exists because the probe's exit code
+// cannot express the difference between the two things an operator acts on
+// differently: a marker that is STALE says the writing loop is wedged and a
+// restart may clear it, while one that is ABSENT says nothing has written it yet
+// (a cold start, or a wiped volume) and a restart changes nothing.
+type MarkerState int
+
+const (
+	// MarkerFresh is a marker present and, when a deadline is armed, inside it.
+	MarkerFresh MarkerState = iota
+	// MarkerStale is a marker present but older than the armed deadline. Only
+	// reachable with WithMaxAge; without it a present marker is always fresh.
+	MarkerStale
+	// MarkerAbsent is a marker that does not exist in a usable directory.
+	MarkerAbsent
+	// MarkerUnreadable is a marker whose stat failed for a reason other than
+	// absence (permission, symlink loop, I/O) in a usable directory.
+	MarkerUnreadable
+	// MarkerDirUnavailable is the DEGRADED mode: the marker's directory cannot
+	// be written, so the app has no way to signal through the filesystem at all
+	// and its silence is not evidence of ill health. The probe treats this as
+	// healthy on purpose; see RunProbe.
+	MarkerDirUnavailable
+)
+
+// String renders the state for a log attribute.
+func (s MarkerState) String() string {
+	switch s {
+	case MarkerFresh:
+		return "fresh"
+	case MarkerStale:
+		return "stale"
+	case MarkerAbsent:
+		return "absent"
+	case MarkerUnreadable:
+		return "unreadable"
+	case MarkerDirUnavailable:
+		return "dir-unavailable"
+	}
+	return "unknown"
+}
+
+// Freshness is one look at a health marker: what state it is in, how old it is,
+// and why the stat failed when it did.
+//
+// It exists because ProbeCheck answers 0-or-1 and throws away two values the
+// decision already computed. A caller that wants to ACT on marker freshness
+// in-process - a resident daemon watching its own work loop for a wedge, rather
+// than a `health` subcommand exiting for a container healthcheck - needs the age
+// to report it and needs stale distinguished from absent to avoid calling a cold
+// start a wedge. Without this it had to re-stat the file the library had just
+// stat'ed, which is a second implementation of the same reading.
+type Freshness struct {
+	// Err is the underlying stat or directory-probe error for MarkerUnreadable
+	// and MarkerDirUnavailable, nil otherwise.
+	Err error
+	// Age is how long ago the marker was last written. Meaningful only for
+	// MarkerFresh and MarkerStale; zero for every state with no marker to age.
+	Age time.Duration
+	// MaxAge is the armed deadline, or 0 when none was armed. Carried so a
+	// caller can log the lease it judged against without re-deriving it.
+	MaxAge time.Duration
+	State  MarkerState
+}
+
+// Healthy reports whether this reading is the probe's healthy verdict, so the
+// exit-code and the structured readings can never disagree: a fresh marker, or a
+// directory the app cannot signal through at all.
+func (f Freshness) Healthy() bool {
+	return f.State == MarkerFresh || f.State == MarkerDirUnavailable
+}
+
+// Reason is the operator-facing diagnostic for an unhealthy reading, and the
+// empty string for a healthy one. It is the text RunProbe writes to stderr.
+func (f Freshness) Reason() string {
+	switch f.State {
+	case MarkerStale:
+		return fmt.Sprintf("unhealthy: marker stale: %s old exceeds max-age %s",
+			f.Age.Truncate(time.Second), f.MaxAge)
+	case MarkerAbsent:
+		return "unhealthy: marker absent"
+	case MarkerUnreadable:
+		return "unhealthy: marker stat failed: " + f.Err.Error()
+	case MarkerFresh, MarkerDirUnavailable:
+		return ""
+	}
+	return ""
+}
+
+// Inspect reads a health marker and reports what it found, without deciding
+// anything or exiting. It is the one implementation of the freshness reading;
+// RunProbe and ProbeCheck are presentations of it, so a caller acting on
+// Inspect's result and a container healthcheck reading the exit code cannot
+// diverge.
+//
+// The options are the probe's: pass WithMaxAge to arm the lease, and read
+// MarkerStale to detect a wedged loop. Without it a present marker is always
+// MarkerFresh, because existence is the only claim being made.
+func Inspect(path string, opts ...ProbeOption) Freshness {
+	var cfg probeConfig
+	for _, o := range opts {
+		o(&cfg)
+	}
+	info, statErr := os.Stat(path) // #nosec G703 -- trusted caller-supplied marker path, existence check only
+	if statErr == nil {
+		age := time.Since(info.ModTime())
+		state := MarkerFresh
+		if cfg.maxAge > 0 && age > cfg.maxAge {
+			state = MarkerStale
+		}
+		return Freshness{State: state, Age: age, MaxAge: cfg.maxAge}
+	}
+	// The directory probe runs BEFORE classifying the stat error, and its
+	// success is what makes absence meaningful: a marker missing from a
+	// directory nothing can write to is not evidence the app is unhealthy.
+	if dirErr := probeHealthDir(path); dirErr != nil {
+		return Freshness{State: MarkerDirUnavailable, MaxAge: cfg.maxAge, Err: dirErr}
+	}
+	if errors.Is(statErr, fs.ErrNotExist) {
+		return Freshness{State: MarkerAbsent, MaxAge: cfg.maxAge}
+	}
+	return Freshness{State: MarkerUnreadable, MaxAge: cfg.maxAge, Err: statErr}
+}
+
 // RunProbe runs in the separate `health` subcommand process. It exits
 // 0 if the marker is present (and fresh, when WithMaxAge is armed) or
 // the marker directory is unwritable (degraded mode: the long-running
@@ -262,26 +387,17 @@ func ProbeCheck(path string, opts ...ProbeOption) int {
 // exceeded, and the underlying stat error for anything else
 // (permission, symlink loop, I/O), so RunProbe does not mislabel those
 // as absence.
+//
+// It is a PRESENTATION of Inspect rather than a second reading: one
+// implementation decides, and the exit code and the structured result are two
+// views of it. A caller acting on Inspect and a container healthcheck reading
+// this exit code therefore cannot disagree.
 func probeCheck(path string, opts ...ProbeOption) (code int, reason string) {
-	var cfg probeConfig
-	for _, o := range opts {
-		o(&cfg)
-	}
-	info, statErr := os.Stat(path) // #nosec G703 -- trusted caller-supplied marker path, existence check only
-	if statErr == nil {
-		if age := time.Since(info.ModTime()); cfg.maxAge > 0 && age > cfg.maxAge {
-			return 1, fmt.Sprintf("unhealthy: marker stale: %s old exceeds max-age %s",
-				age.Truncate(time.Second), cfg.maxAge)
-		}
+	f := Inspect(path, opts...)
+	if f.Healthy() {
 		return 0, ""
 	}
-	if err := probeHealthDir(path); err != nil {
-		return 0, ""
-	}
-	if errors.Is(statErr, fs.ErrNotExist) {
-		return 1, "unhealthy: marker absent"
-	}
-	return 1, "unhealthy: marker stat failed: " + statErr.Error()
+	return 1, f.Reason()
 }
 
 // --- helpers ---

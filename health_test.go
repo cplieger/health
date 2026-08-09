@@ -921,3 +921,188 @@ func TestHealthMarker_SetChecked_degradedReturnsNil(t *testing.T) {
 		t.Errorf("degraded SetChecked should never create the file: %v", err)
 	}
 }
+
+// markerAged writes a marker backdated by age and returns its path.
+func markerAged(t *testing.T, age time.Duration) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), ".healthy")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatalf("create marker: %v", err)
+	}
+	old := time.Now().Add(-age)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatalf("backdate marker: %v", err)
+	}
+	return path
+}
+
+// TestInspect_states covers the reading Inspect exists to expose: the two things
+// the exit code cannot tell apart, plus the age it used to discard.
+//
+// STALE and ABSENT are the pair that matters. Both exit 1, so a caller acting on
+// ProbeCheck alone cannot distinguish "the work loop is wedged, a restart may
+// clear it" from "nothing has written this yet (cold start, wiped volume), a
+// restart changes nothing" - which is why the caller that wanted to act in-process
+// had to re-stat the file the library had just stat'ed.
+func TestInspect_states(t *testing.T) {
+	t.Run("fresh within an armed deadline", func(t *testing.T) {
+		got := Inspect(markerAged(t, time.Second), WithMaxAge(time.Hour))
+		if got.State != MarkerFresh {
+			t.Errorf("state = %v, want MarkerFresh", got.State)
+		}
+		if !got.Healthy() {
+			t.Error("a fresh marker must be Healthy")
+		}
+		if got.Reason() != "" {
+			t.Errorf("reason = %q, want empty for a healthy reading", got.Reason())
+		}
+		if got.Age <= 0 || got.Age > time.Minute {
+			t.Errorf("age = %s, want a small positive age", got.Age)
+		}
+		if got.MaxAge != time.Hour {
+			t.Errorf("maxAge = %s, want the armed hour carried through", got.MaxAge)
+		}
+	})
+
+	t.Run("present but past an armed deadline is stale, not absent", func(t *testing.T) {
+		got := Inspect(markerAged(t, 2*time.Hour), WithMaxAge(time.Hour))
+		if got.State != MarkerStale {
+			t.Fatalf("state = %v, want MarkerStale", got.State)
+		}
+		if got.Healthy() {
+			t.Error("a stale marker must not be Healthy")
+		}
+		if got.Age < 2*time.Hour {
+			t.Errorf("age = %s, want at least the 2h backdate - the age is the value a caller cannot recover from an exit code", got.Age)
+		}
+		if !strings.Contains(got.Reason(), "marker stale") {
+			t.Errorf("reason = %q, want it to name staleness", got.Reason())
+		}
+	})
+
+	t.Run("present with no deadline armed is always fresh", func(t *testing.T) {
+		// Existence-only is the library's default and stays so: freshness is
+		// opt-in per app via WithMaxAge.
+		got := Inspect(markerAged(t, 100*time.Hour))
+		if got.State != MarkerFresh {
+			t.Errorf("state = %v, want MarkerFresh with no deadline armed", got.State)
+		}
+		if got.MaxAge != 0 {
+			t.Errorf("maxAge = %s, want 0 when unarmed", got.MaxAge)
+		}
+	})
+
+	t.Run("missing from a usable directory is absent", func(t *testing.T) {
+		got := Inspect(filepath.Join(t.TempDir(), ".healthy"), WithMaxAge(time.Hour))
+		if got.State != MarkerAbsent {
+			t.Fatalf("state = %v, want MarkerAbsent", got.State)
+		}
+		if got.Healthy() {
+			t.Error("an absent marker in a usable directory must not be Healthy")
+		}
+		if got.Age != 0 {
+			t.Errorf("age = %s, want 0 - there is no marker to age", got.Age)
+		}
+		if got.Reason() != "unhealthy: marker absent" {
+			t.Errorf("reason = %q, want the absence diagnostic", got.Reason())
+		}
+	})
+
+	t.Run("a stat failure that is not absence is unreadable", func(t *testing.T) {
+		loop := filepath.Join(t.TempDir(), ".healthy")
+		if err := os.Symlink(loop, loop); err != nil {
+			t.Skipf("cannot create self-referencing symlink: %v", err)
+		}
+		got := Inspect(loop)
+		if got.State != MarkerUnreadable {
+			t.Fatalf("state = %v, want MarkerUnreadable", got.State)
+		}
+		if got.Err == nil {
+			t.Error("an unreadable marker must carry the underlying stat error")
+		}
+		if strings.Contains(got.Reason(), "marker absent") {
+			t.Errorf("reason = %q, must not claim absence for a non-ENOENT failure", got.Reason())
+		}
+	})
+
+	t.Run("an unusable directory is degraded and stays healthy", func(t *testing.T) {
+		dir := filepath.Join(t.TempDir(), "ro")
+		if err := os.Mkdir(dir, 0o500); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		path := filepath.Join(dir, ".healthy")
+		if err := probeHealthDir(path); err == nil {
+			t.Skip("test environment bypasses directory mode; skipping")
+		}
+		got := Inspect(path)
+		if got.State != MarkerDirUnavailable {
+			t.Fatalf("state = %v, want MarkerDirUnavailable", got.State)
+		}
+		if !got.Healthy() {
+			t.Error("degraded mode must stay Healthy: the app has no way to signal at all, so silence is not evidence of ill health")
+		}
+		if got.Reason() != "" {
+			t.Errorf("reason = %q, want empty - degraded is not an unhealthy verdict", got.Reason())
+		}
+	})
+}
+
+// TestInspectAndProbeCheckCannotDisagree is the property that justifies
+// reimplementing probeCheck on top of Inspect rather than leaving two readings:
+// the exit code a container healthcheck sees and the structured result a caller
+// acts on must be two views of ONE decision. If they ever diverge, an app can
+// restart itself on a verdict its own healthcheck disagrees with.
+func TestInspectAndProbeCheckCannotDisagree(t *testing.T) {
+	loop := filepath.Join(t.TempDir(), "loop")
+	_ = os.Symlink(loop, loop)
+
+	cases := map[string]struct {
+		path string
+		opts []ProbeOption
+	}{
+		"fresh, unarmed":   {path: markerAged(t, time.Second)},
+		"fresh, armed":     {path: markerAged(t, time.Second), opts: []ProbeOption{WithMaxAge(time.Hour)}},
+		"stale":            {path: markerAged(t, 2*time.Hour), opts: []ProbeOption{WithMaxAge(time.Hour)}},
+		"aged but unarmed": {path: markerAged(t, 100*time.Hour)},
+		"absent":           {path: filepath.Join(t.TempDir(), ".healthy")},
+		"unreadable":       {path: loop},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			f := Inspect(tc.path, tc.opts...)
+			code, reason := probeCheck(tc.path, tc.opts...)
+			wantCode := 1
+			if f.Healthy() {
+				wantCode = 0
+			}
+			if code != wantCode {
+				t.Errorf("probeCheck = %d but Inspect says Healthy()=%v (state %v)", code, f.Healthy(), f.State)
+			}
+			if reason != f.Reason() {
+				t.Errorf("probeCheck reason = %q, Inspect.Reason() = %q; the two presentations must carry the same text", reason, f.Reason())
+			}
+			if got := ProbeCheck(tc.path, tc.opts...); got != code {
+				t.Errorf("ProbeCheck = %d, probeCheck = %d", got, code)
+			}
+		})
+	}
+}
+
+// TestMarkerStateString pins the log vocabulary: these strings land in operator
+// log lines as a `marker_state` attribute, so a rename is a consumer-visible
+// change rather than a cosmetic one.
+func TestMarkerStateString(t *testing.T) {
+	want := map[MarkerState]string{
+		MarkerFresh:          "fresh",
+		MarkerStale:          "stale",
+		MarkerAbsent:         "absent",
+		MarkerUnreadable:     "unreadable",
+		MarkerDirUnavailable: "dir-unavailable",
+		MarkerState(99):      "unknown",
+	}
+	for state, str := range want {
+		if got := state.String(); got != str {
+			t.Errorf("MarkerState(%d).String() = %q, want %q", int(state), got, str)
+		}
+	}
+}
