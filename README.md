@@ -88,6 +88,33 @@ marker): an idle resident between triggers is healthy, and restarting it
 cannot fix a trigger that stopped firing. `Healthy()` and `Handler` stay
 existence-based regardless.
 
+### Acting on freshness in-process (`Inspect`)
+
+`RunProbe` and `ProbeCheck` answer for a healthcheck: exit 0 or 1. A resident
+process that wants to act on its OWN marker — a daemon watching its work loop
+for a wedge, rather than a subcommand exiting for Docker — needs two things the
+exit code cannot carry: the marker's age, to report it, and the difference
+between STALE and ABSENT, because they call for opposite responses. A stale
+marker means the loop is wedged and a restart may clear it; an absent one means
+nothing has written it yet (a cold start, a wiped volume) and a restart changes
+nothing.
+
+```go
+switch f := health.Inspect(path, health.WithMaxAge(lease)); f.State {
+case health.MarkerStale:
+    log.Warn("work loop overdue", "age", f.Age, "lease", f.MaxAge)
+    // act: nudge, restart, or surface it
+case health.MarkerAbsent, health.MarkerUnreadable, health.MarkerDirUnavailable:
+    // not evidence of a wedge; the probe already owns these
+}
+```
+
+`Inspect` is the single implementation of the reading — `RunProbe` and
+`ProbeCheck` are presentations of it — so a process acting on `Inspect` and a
+container healthcheck reading the exit code cannot reach different verdicts.
+Existence-only remains the default: without `WithMaxAge`, a present marker is
+always `MarkerFresh`.
+
 ### HTTP probe (wrapped third-party servers)
 
 For images whose main process is not your code (so nothing can touch a
@@ -166,6 +193,9 @@ Response (503 Service Unavailable):
 - `RunProbe(path string, opts ...ProbeOption)`: probe process entry (calls os.Exit)
 - `ProbeCheck(path string, opts ...ProbeOption) int`: testable probe logic (0=healthy or degraded, 1=unhealthy)
 - `ProbeOption` / `WithMaxAge(d time.Duration)`: opt-in freshness deadline for the probe side (marker older than `d` is unhealthy; non-positive `d` disables)
+- `Inspect(path string, opts ...ProbeOption) Freshness`: the same reading, structured and without exiting — for a resident process acting on its OWN marker in-process rather than a subcommand exiting for a healthcheck
+- `Freshness`: one look at a marker (`State`, `Age`, `MaxAge`, `Err`) plus `Healthy() bool` and `Reason() string`
+- `MarkerState` / `MarkerFresh`, `MarkerStale`, `MarkerAbsent`, `MarkerUnreadable`, `MarkerDirUnavailable`: the state vocabulary, with a `String()` for log attributes
 
 In the `github.com/cplieger/health/probe` module:
 
