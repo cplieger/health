@@ -130,7 +130,7 @@ func TestURL_statusBoundary(t *testing.T) {
 
 	rapid.Check(t, func(rt *rapid.T) {
 		code := rapid.IntRange(200, 599).Draw(rt, "status")
-		err := URL(context.Background(), fmt.Sprintf("%s/%d", srv.URL, code))
+		err := URL(t.Context(), fmt.Sprintf("%s/%d", srv.URL, code))
 		healthy := code <= 299
 		if healthy != (err == nil) {
 			rt.Fatalf("status %d: err = %v, want healthy=%v", code, err, healthy)
