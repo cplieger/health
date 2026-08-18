@@ -16,10 +16,10 @@ func Example() {
 	defer m.Cleanup()
 
 	m.Set(true)
-	fmt.Println("healthy:", m.Healthy())
+	fmt.Println("healthy:", m.CheckHealthy())
 
 	m.Set(false)
-	fmt.Println("healthy:", m.Healthy())
+	fmt.Println("healthy:", m.CheckHealthy())
 	// Output:
 	// healthy: true
 	// healthy: false

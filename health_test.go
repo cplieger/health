@@ -1106,3 +1106,24 @@ func TestMarkerStateString(t *testing.T) {
 		}
 	}
 }
+
+// CheckHealthy is the primary spelling of the liveness read and Healthy the
+// Signal adapter over it; the two must never disagree, or a Handler consumer
+// and a direct caller would see different liveness for one marker.
+func TestCheckHealthyAndHealthyCannotDisagree(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "marker")
+	m := NewMarker(path)
+	for _, set := range []bool{true, false, true} {
+		m.Set(set)
+		if got, want := m.Healthy(), m.CheckHealthy(); got != want {
+			t.Errorf("after Set(%v) on %s: Healthy() = %v, CheckHealthy() = %v; must agree", set, path, got, want)
+		}
+		if got := m.CheckHealthy(); got != set {
+			t.Errorf("after Set(%v) on %s: CheckHealthy() = %v, want %v", set, path, got, set)
+		}
+	}
+	var nilM *Marker
+	if nilM.CheckHealthy() || nilM.Healthy() {
+		t.Errorf("nil marker: CheckHealthy() = %v, Healthy() = %v, want false, false", nilM.CheckHealthy(), nilM.Healthy())
+	}
+}
