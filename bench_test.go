@@ -31,15 +31,16 @@ func BenchmarkProbeCheck_Unhealthy(b *testing.B) {
 	}
 }
 
-// BenchmarkMarkerHealthy benchmarks the Signal.Healthy() os.Stat call
+// BenchmarkMarkerCheckHealthy benchmarks the CheckHealthy os.Stat call
+// (Signal.Healthy delegates to it)
 // that HTTP handlers invoke on every request.
-func BenchmarkMarkerHealthy(b *testing.B) {
+func BenchmarkMarkerCheckHealthy(b *testing.B) {
 	path := filepath.Join(b.TempDir(), ".healthy")
 	m := NewMarker(path)
 	m.Set(true)
 	b.ResetTimer()
 	for b.Loop() {
-		m.Healthy()
+		m.CheckHealthy()
 	}
 }
 

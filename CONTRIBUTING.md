@@ -77,13 +77,13 @@ mode, and both behaviors are deliberate:
   directory is unwritable. The container is alive; the only broken piece is
   the signaling channel. Reporting unhealthy would trigger a Docker restart
   loop that cannot fix a compose misconfiguration.
-- `Marker.Healthy()` (the `Signal` method the HTTP `Handler` calls) does a
-  strict `os.Stat` and returns **false** in degraded mode, because HTTP
-  consumers deserve an honest signal.
+- `Marker.CheckHealthy()` (which `Healthy()`, the `Signal` method the HTTP
+  `Handler` calls, delegates to) does a strict `os.Stat` and returns **false**
+  in degraded mode, because HTTP consumers deserve an honest signal.
 
 If you find yourself "fixing" this divergence so the two agree, stop; it
 is the design. The reasoning lives in the package doc comment and the
-`Healthy` / `ProbeCheck` doc comments; update those together if the
+`CheckHealthy` / `ProbeCheck` doc comments; update those together if the
 behavior ever legitimately changes.
 
 ## Unsupported by Design: a binding contract
@@ -104,7 +104,8 @@ The whole surface is small enough to enumerate; keep it that way.
 - `Signal`: interface with `Healthy() bool`; `*Marker` satisfies it (a
   compile-time assertion guards this).
 - `Marker`: main type. `NewMarker(path) *Marker`, `Set(ok bool)`,
-  `SetChecked(ok bool) error`, `Cleanup()`, `Healthy() bool`.
+  `SetChecked(ok bool) error`, `Cleanup()`, `CheckHealthy() bool`, and
+  `Healthy() bool` (the `Signal` adapter, delegating to `CheckHealthy`).
 - `RunProbe(path string, opts ...ProbeOption)`: probe-process entry point;
   calls `os.Exit`.
 - `ProbeCheck(path string, opts ...ProbeOption) int`: the same decision

@@ -85,8 +85,8 @@ Arm it only where the resident process runs its own bounded work cycle at a
 known cadence, so a stale marker means a wedged loop that a restart fixes. Do
 NOT arm it for externally-triggered apps (a separate `docker exec` writes the
 marker): an idle resident between triggers is healthy, and restarting it
-cannot fix a trigger that stopped firing. `Healthy()` and `Handler` stay
-existence-based regardless.
+cannot fix a trigger that stopped firing. `CheckHealthy()` (and `Healthy()`,
+its `Signal` adapter) and `Handler` stay existence-based regardless.
 
 ### Acting on freshness in-process (`Inspect`)
 
@@ -187,7 +187,7 @@ Response (503 Service Unavailable):
 - `(*Marker).Set(ok bool)`: touch or remove marker (failures logged and swallowed)
 - `(*Marker).SetChecked(ok bool) error`: `Set` with the filesystem outcome reported; deliberately nil in degraded mode, so a compose misconfiguration never becomes an alert loop
 - `(*Marker).Cleanup()`: remove marker on shutdown
-- `(*Marker).Healthy() bool`: stat-based liveness check
+- `(*Marker).CheckHealthy() bool`: the stat-based liveness check (one `os.Stat` per call, named as the check it is). `(*Marker).Healthy() bool` delegates to it and exists to satisfy `Signal`
 - `Status`: JSON response struct emitted by `Handler` (fields: `Status`, `Timestamp`)
 - `Handler(s Signal) http.Handler`: optional JSON health endpoint
 - `RunProbe(path string, opts ...ProbeOption)`: probe process entry (calls os.Exit)

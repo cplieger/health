@@ -185,22 +185,31 @@ func (m *Marker) Cleanup() {
 	}
 }
 
-// Healthy reports whether the marker file currently exists. Satisfies
-// the Signal interface so HTTP handlers can report liveness without
-// reaching into a package global. Strict os.Stat: a degraded marker
-// directory (read-only mount, missing tmpfs) causes Healthy to return
-// false so the HTTP endpoint honestly reports unhealthy.
+// CheckHealthy reports whether the marker file currently exists, at the cost
+// of one os.Stat per call — it is a filesystem check, not a cached field read,
+// which is why it carries a verb name. (It is deliberately NOT named Probe:
+// this package's probe-side vocabulary — RunProbe, ProbeCheck, the health/probe
+// module — reports healthy in degraded mode, and this method reports the
+// opposite.) Strict os.Stat: a degraded marker directory (read-only mount,
+// missing tmpfs) causes CheckHealthy to return false so an HTTP endpoint
+// honestly reports unhealthy.
 //
 // In degraded mode this intentionally diverges from ProbeCheck, which
-// returns 0 (healthy) to avoid a Docker restart loop. Healthy returns
+// returns 0 (healthy) to avoid a Docker restart loop. CheckHealthy returns
 // false because HTTP consumers deserve an honest signal; see package doc.
-func (m *Marker) Healthy() bool {
+func (m *Marker) CheckHealthy() bool {
 	if m == nil {
 		return false
 	}
 	_, err := os.Stat(m.path)
 	return err == nil
 }
+
+// Healthy satisfies the Signal interface by delegating to
+// [Marker.CheckHealthy]; it exists so a *Marker can be handed to Handler and
+// any other Signal consumer. It inherits CheckHealthy's cost: one os.Stat per
+// call, not a field read.
+func (m *Marker) Healthy() bool { return m.CheckHealthy() }
 
 // ProbeOption configures the probe-side health decision (RunProbe and
 // ProbeCheck). Without options the probe checks marker existence only.
@@ -425,8 +434,8 @@ func (m *Marker) warnFailure(msg string, err error) {
 // recordState records a successfully applied liveness value and
 // clears the failed flag, returning whether this call recovered
 // from a prior failure streak. Caller holds m.mu.
-func (m *Marker) recordState(ok bool) (recovered bool) {
-	recovered = m.failed
+func (m *Marker) recordState(ok bool) bool {
+	recovered := m.failed
 	m.known, m.healthy, m.failed = true, ok, false
 	m.loggedFailSigs = m.loggedFailSigs[:0]
 	return recovered

@@ -34,6 +34,11 @@ type Status struct {
 // endpoint as the sole liveness probe on a service that may run with a
 // read-only filesystem and no /tmp tmpfs, or it will restart-loop a
 // container that is actually alive.
+//
+// Cost: with a *Marker signal every request performs one os.Stat (see
+// Marker.CheckHealthy); that is the point — the answer is read fresh from
+// the filesystem — but it means this endpoint should sit behind whatever
+// probe cadence the platform applies, not on a request-per-second hot path.
 func Handler(s Signal) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		st := Status{Timestamp: time.Now().UTC().Format(time.RFC3339)}
