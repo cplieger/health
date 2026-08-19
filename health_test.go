@@ -378,19 +378,9 @@ func TestHealthMarker_ConcurrentSetCleanupHealthy(t *testing.T) {
 
 	var wg sync.WaitGroup
 	for i := range 100 {
-		wg.Add(3)
-		go func() {
-			defer wg.Done()
-			m.Set(i%2 == 0)
-		}()
-		go func() {
-			defer wg.Done()
-			m.Cleanup()
-		}()
-		go func() {
-			defer wg.Done()
-			_ = m.Healthy()
-		}()
+		wg.Go(func() { m.Set(i%2 == 0) })
+		wg.Go(func() { m.Cleanup() })
+		wg.Go(func() { _ = m.Healthy() })
 	}
 	wg.Wait()
 }
