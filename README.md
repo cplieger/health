@@ -122,7 +122,7 @@ marker), bake the standalone probe binary into the image and point it at
 the endpoint(s) that define liveness:
 
 ```dockerfile
-FROM golang:1.26-alpine AS probe
+FROM golang:1.27-alpine AS probe
 RUN CGO_ENABLED=0 GOBIN=/out go install github.com/cplieger/health/probe/cmd/probe@latest
 
 FROM gcr.io/distroless/static-debian12
