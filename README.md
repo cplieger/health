@@ -55,7 +55,7 @@ if len(os.Args) > 1 && os.Args[1] == "health" {
 > **External triggers and file ownership:** the marker belongs to whoever
 > created it. If a separate `docker exec` process updates it (a job scheduler
 > invoking your binary's `run`/`sync` subcommand), run that exec as the same
-> UID as the container's main process, e.g. the `user` field of an Ofelia
+> UID as the container's main process, for example the `user` field of an Ofelia
 > job-exec block. A mismatched exec user fails the marker write with
 > permission denied; under `Set` the health signal is lost silently. When an
 > external scheduler alerts on the subcommand's exit code, call `SetChecked`
@@ -85,14 +85,14 @@ Arm it only where the resident process runs its own bounded work cycle at a
 known cadence, so a stale marker means a wedged loop that a restart fixes. Do
 NOT arm it for externally-triggered apps (a separate `docker exec` writes the
 marker): an idle resident between triggers is healthy, and restarting it
-cannot fix a trigger that stopped firing. `CheckHealthy()` (and `Healthy()`,
-its `Signal` adapter) and `Handler` stay existence-based regardless.
+cannot fix a trigger that stopped firing. `CheckHealthy()`, `Healthy()`, and
+`Handler` stay existence-based regardless.
 
 ### Acting on freshness in-process (`Inspect`)
 
 `RunProbe` and `ProbeCheck` answer for a healthcheck: exit 0 or 1. A resident
-process that wants to act on its OWN marker — a daemon watching its work loop
-for a wedge, rather than a subcommand exiting for Docker — needs two things the
+process that wants to act on its OWN marker (a daemon watching its work loop
+for a wedge, rather than a subcommand exiting for Docker) needs two things the
 exit code cannot carry: the marker's age, to report it, and the difference
 between STALE and ABSENT, because they call for opposite responses. A stale
 marker means the loop is wedged and a restart may clear it; an absent one means
@@ -109,8 +109,8 @@ case health.MarkerAbsent, health.MarkerUnreadable, health.MarkerDirUnavailable:
 }
 ```
 
-`Inspect` is the single implementation of the reading — `RunProbe` and
-`ProbeCheck` are presentations of it — so a process acting on `Inspect` and a
+`Inspect` is the single implementation of the reading (`RunProbe` and
+`ProbeCheck` are presentations of it), so a process acting on `Inspect` and a
 container healthcheck reading the exit code cannot reach different verdicts.
 Existence-only remains the default: without `WithMaxAge`, a present marker is
 always `MarkerFresh`.
@@ -171,7 +171,7 @@ Response (503 Service Unavailable):
 {"status":"Unavailable","timestamp":"2025-01-01T00:00:00Z"}
 ```
 
-> **Degraded mode caveat:** when the marker directory is unwritable (e.g.
+> **Degraded mode caveat:** when the marker directory is unwritable (for example
 > `read_only: true` with no `/tmp` tmpfs), `Handler` reports 503, intentionally
 > diverging from the `health` subcommand probe (`ProbeCheck`), which reports
 > healthy to avoid a Docker restart loop. Do not wire `Handler` as the _sole_
@@ -187,13 +187,13 @@ Response (503 Service Unavailable):
 - `(*Marker).Set(ok bool)`: touch or remove marker (failures logged and swallowed)
 - `(*Marker).SetChecked(ok bool) error`: `Set` with the filesystem outcome reported; deliberately nil in degraded mode, so a compose misconfiguration never becomes an alert loop
 - `(*Marker).Cleanup()`: remove marker on shutdown
-- `(*Marker).CheckHealthy() bool`: the stat-based liveness check (one `os.Stat` per call, named as the check it is). `(*Marker).Healthy() bool` delegates to it and exists to satisfy `Signal`
+- `(*Marker).CheckHealthy() bool`: stat-based liveness check, one `os.Stat` per call. `(*Marker).Healthy() bool` delegates to it and satisfies `Signal`
 - `Status`: JSON response struct emitted by `Handler` (fields: `Status`, `Timestamp`)
 - `Handler(s Signal) http.Handler`: optional JSON health endpoint
 - `RunProbe(path string, opts ...ProbeOption)`: probe process entry (calls os.Exit)
 - `ProbeCheck(path string, opts ...ProbeOption) int`: testable probe logic (0=healthy or degraded, 1=unhealthy)
 - `ProbeOption` / `WithMaxAge(d time.Duration)`: opt-in freshness deadline for the probe side (marker older than `d` is unhealthy; non-positive `d` disables)
-- `Inspect(path string, opts ...ProbeOption) Freshness`: the same reading, structured and without exiting — for a resident process acting on its OWN marker in-process rather than a subcommand exiting for a healthcheck
+- `Inspect(path string, opts ...ProbeOption) Freshness`: the same reading, structured and without exiting; for a resident process acting on its OWN marker in-process rather than a subcommand exiting for a healthcheck
 - `Freshness`: one look at a marker (`State`, `Age`, `MaxAge`, `Err`) plus `Healthy() bool` and `Reason() string`
 - `MarkerState` / `MarkerFresh`, `MarkerStale`, `MarkerAbsent`, `MarkerUnreadable`, `MarkerDirUnavailable`: the state vocabulary, with a `String()` for log attributes
 
@@ -207,7 +207,7 @@ In the `github.com/cplieger/health/probe` module:
 ## Unsupported by Design
 
 The following features are deliberately excluded. This library complements
-HTTP-based health libraries (e.g. hellofresh/health-go, alexliesenfeld/health)
+HTTP-based health libraries (for example hellofresh/health-go, alexliesenfeld/health)
 rather than competing with them: those are server-side check frameworks,
 while this library's HTTP probe is a client-side liveness GET for the
 HEALTHCHECK side of the same connection.
