@@ -143,7 +143,7 @@ go test -race ./...
 ```
 
 The concurrent `Set`/`Cleanup`/`Healthy` test is the main reason to run
-with `-race` before pushing. Benchmarks (`ProbeCheck`, `Healthy`, the
+with `-race` before pushing. Benchmarks (`ProbeCheck`, `CheckHealthy`, the
 handler render path, `Set`) live in `bench_test.go`:
 
 ```sh
