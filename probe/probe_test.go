@@ -33,6 +33,7 @@ func TestURL_statusTable(t *testing.T) {
 		{"ok", http.StatusOK, false},
 		{"created", http.StatusCreated, false},
 		{"no content", http.StatusNoContent, false},
+		{"last_2xx_status", 299, false},
 		{"not found", http.StatusNotFound, true},
 		{"server error", http.StatusInternalServerError, true},
 		{"service unavailable", http.StatusServiceUnavailable, true},
