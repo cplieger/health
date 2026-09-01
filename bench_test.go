@@ -8,8 +8,8 @@ import (
 	"testing"
 )
 
-// BenchmarkProbeCheck_Healthy benchmarks the overall-status computation
-// when the marker file exists (the common steady-state hot path).
+// BenchmarkProbeCheck_Healthy benchmarks the steady-state hot path when
+// the marker file exists.
 func BenchmarkProbeCheck_Healthy(b *testing.B) {
 	path := filepath.Join(b.TempDir(), ".healthy")
 	if err := os.WriteFile(path, nil, 0o600); err != nil {
@@ -22,7 +22,7 @@ func BenchmarkProbeCheck_Healthy(b *testing.B) {
 }
 
 // BenchmarkProbeCheck_Unhealthy benchmarks the probe when the marker is
-// absent from a writable directory (triggers the full decision path).
+// absent from a writable directory.
 func BenchmarkProbeCheck_Unhealthy(b *testing.B) {
 	path := filepath.Join(b.TempDir(), ".healthy")
 	b.ResetTimer()
@@ -31,9 +31,8 @@ func BenchmarkProbeCheck_Unhealthy(b *testing.B) {
 	}
 }
 
-// BenchmarkMarkerCheckHealthy benchmarks the CheckHealthy os.Stat call
-// (Signal.Healthy delegates to it)
-// that HTTP handlers invoke on every request.
+// BenchmarkMarkerCheckHealthy benchmarks the os.Stat call HTTP handlers
+// invoke on every request (Signal.Healthy delegates to it).
 func BenchmarkMarkerCheckHealthy(b *testing.B) {
 	path := filepath.Join(b.TempDir(), ".healthy")
 	m := NewMarker(path)
@@ -45,7 +44,7 @@ func BenchmarkMarkerCheckHealthy(b *testing.B) {
 }
 
 // BenchmarkHandlerHealthy benchmarks the full HTTP handler render path
-// (JSON marshal + write) when the signal reports healthy.
+// when the signal reports healthy.
 func BenchmarkHandlerHealthy(b *testing.B) {
 	h := Handler(stubSignal{healthy: true})
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)

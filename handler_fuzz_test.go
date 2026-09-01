@@ -6,10 +6,9 @@ import (
 	"testing"
 )
 
-// FuzzHandlerSignal fuzzes the HTTP handler with arbitrary signal states
-// and request methods/paths. This exercises the JSON render path and
-// ensures the status-code contract holds (200 healthy, 503 otherwise)
-// with no panics regardless of input combinations.
+// FuzzHandlerSignal exercises the JSON render path with arbitrary
+// signal states and request methods/paths, ensuring the status-code
+// contract holds (200 healthy, 503 otherwise) with no panics.
 func FuzzHandlerSignal(f *testing.F) {
 	f.Add(true, "GET", "/health")
 	f.Add(false, "GET", "/health")

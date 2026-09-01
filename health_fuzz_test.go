@@ -8,12 +8,11 @@ import (
 	"testing"
 )
 
-// FuzzProbeCheck fuzzes the ProbeCheck path-based decision logic. It
-// asserts two invariants: (1) bounded output -- ProbeCheck never panics
-// and returns only 0 or 1 for ANY raw input path; (2) state consistency
-// -- in a controlled writable dir, a present marker yields 0 and an absent
-// marker yields 1. The marker name is a hash of the input so pathological
-// inputs ("..", ".", "/") can neither escape the temp dir nor collapse onto it.
+// FuzzProbeCheck asserts bounded output (ProbeCheck never panics and
+// returns only 0 or 1 for any raw input path) and state consistency (a
+// present marker yields 0, absent yields 1) in a controlled writable
+// dir. The marker name is a hash of the input so pathological inputs
+// ("..", ".", "/") can neither escape the temp dir nor collapse onto it.
 func FuzzProbeCheck(f *testing.F) {
 	f.Add(".healthy")
 	f.Add("/tmp/.healthy")
@@ -28,15 +27,12 @@ func FuzzProbeCheck(f *testing.F) {
 	dir := f.TempDir()
 
 	f.Fuzz(func(t *testing.T, suffix string) {
-		// Invariant 1 (bounded output): ProbeCheck must never panic and
-		// must return only 0 or 1 for any raw input path.
+		// Bounded output: ProbeCheck must never panic and must return
+		// only 0 or 1 for any raw input path.
 		if got := ProbeCheck(suffix); got != 0 && got != 1 {
 			t.Fatalf("ProbeCheck(%q) = %d, want 0 or 1", suffix, got)
 		}
 
-		// Invariant 2 (state consistency in a controlled writable dir):
-		// derive a filesystem-safe, collision-free child name so
-		// pathological inputs cannot escape dir or collapse onto it.
 		name := fmt.Sprintf("m-%x", sha256.Sum256([]byte(suffix)))
 		path := filepath.Join(dir, name)
 
