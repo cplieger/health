@@ -44,6 +44,29 @@ func main() {
 }
 ```
 
+### Shutdown health precedence
+
+A resident daemon can prevent late successful work from masking shutdown. Wrap
+its marker in a `Latch`, send ordinary health decisions through `Set`, and call
+`BeginDrain` before waiting for in-flight work:
+
+```go
+marker := health.NewMarker(health.DefaultPath)
+defer marker.Cleanup()
+
+state := health.NewLatch(marker)
+state.Set(true)
+
+// Stop admitting work, then make health monotonic toward unhealthy.
+state.BeginDrain()
+
+// This is dropped after BeginDrain; state.Set(false) would still land.
+state.Set(runSucceeded)
+```
+
+The latch owns only write precedence. The app still decides whether a result
+means healthy, unhealthy, or no write at all.
+
 ### Health subcommand (probe process)
 
 ```go
@@ -188,6 +211,10 @@ Response (503 Service Unavailable):
 - `(*Marker).SetChecked(ok bool) error`: `Set` with the filesystem outcome reported; deliberately nil in degraded mode, so a compose misconfiguration never becomes an alert loop
 - `(*Marker).Cleanup()`: remove marker on shutdown
 - `(*Marker).CheckHealthy() bool`: stat-based liveness check, one `os.Stat` per call. `(*Marker).Healthy() bool` delegates to it and satisfies `Signal`
+- `Latch`: shutdown-precedence wrapper over `Marker`; after `BeginDrain`, healthy writes are dropped and unhealthy writes still land
+- `NewLatch(marker *Marker) *Latch`: constructs a latch; keep the marker to call `Cleanup`
+- `(*Latch).Set(healthy bool)`: writes through the marker unless drain has latched a healthy result out
+- `(*Latch).BeginDrain()`: marks unhealthy immediately and makes later health monotonic toward unhealthy
 - `Status`: JSON response struct emitted by `Handler` (fields: `Status`, `Timestamp`)
 - `Handler(s Signal) http.Handler`: optional JSON health endpoint
 - `RunProbe(path string, opts ...ProbeOption)`: probe process entry (calls os.Exit)
