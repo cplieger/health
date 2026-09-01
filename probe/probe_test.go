@@ -50,7 +50,7 @@ func TestURL_statusTable(t *testing.T) {
 }
 
 // TestURL_statusErrorNamesCode pins that a non-2xx failure names the
-// received status, so a HEALTHCHECK log line is diagnosable on its own.
+// received status.
 func TestURL_statusErrorNamesCode(t *testing.T) {
 	srv := statusServer(t, http.StatusServiceUnavailable)
 	err := URL(t.Context(), srv.URL)
@@ -115,10 +115,8 @@ func TestURL_invalidURL(t *testing.T) {
 	}
 }
 
-// TestURL_statusBoundary property-checks the 2xx decision across the
-// whole plausible status range: exactly [200,299] is healthy, everything
-// else (including 3xx responses without a Location header, which the
-// client does not follow) is unhealthy.
+// TestURL_statusBoundary property-checks the 2xx decision: exactly
+// [200,299] is healthy, everything else is unhealthy.
 func TestURL_statusBoundary(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		code, err := strconv.Atoi(strings.TrimPrefix(r.URL.Path, "/"))
@@ -171,8 +169,7 @@ func TestCheck_oneFailureNamesOnlyThatURL(t *testing.T) {
 }
 
 // TestCheck_probesAllURLs pins that the check does not stop at the
-// first failure: a multi-surface healthcheck must report every broken
-// surface in one run.
+// first failure.
 func TestCheck_probesAllURLs(t *testing.T) {
 	bad1 := statusServer(t, http.StatusInternalServerError)
 	bad2 := statusServer(t, http.StatusNotFound)

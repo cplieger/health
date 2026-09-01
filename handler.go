@@ -19,26 +19,20 @@ type Status struct {
 
 // Handler returns an http.Handler that reports the health of the given
 // Signal as a JSON object. Returns 200 with {"status":"OK"} when healthy,
-// 503 with {"status":"Unavailable"} otherwise. This mirrors the response
-// shape of hellofresh/health-go and satisfies K8s HTTP probe expectations.
+// 503 with {"status":"Unavailable"} otherwise (including a nil Signal).
+// This mirrors the response shape of hellofresh/health-go and satisfies
+// K8s HTTP probe expectations.
 //
-// If s is nil, the handler always reports unhealthy (503).
+// In degraded mode (unwritable marker directory), Marker.Healthy()
+// returns false, so this endpoint reports 503 — unlike the `health`
+// subcommand probe (ProbeCheck), which reports healthy to avoid a
+// Docker restart loop. Do not wire this endpoint as the sole liveness
+// probe on a service that may run with a read-only filesystem and no
+// /tmp tmpfs, or it will restart-loop a container that is actually alive.
 //
-// The handler is optional — import and wire it only if your container
-// exposes an HTTP endpoint alongside the file-marker probe.
-//
-// Note: in degraded mode (unwritable marker directory) Marker.Healthy()
-// returns false, so this endpoint reports 503 -- intentionally diverging
-// from the `health` subcommand probe (ProbeCheck), which reports healthy
-// to avoid a Docker restart loop (see package doc). Do not wire this
-// endpoint as the sole liveness probe on a service that may run with a
-// read-only filesystem and no /tmp tmpfs, or it will restart-loop a
-// container that is actually alive.
-//
-// Cost: with a *Marker signal every request performs one os.Stat (see
-// Marker.CheckHealthy); that is the point — the answer is read fresh from
-// the filesystem — but it means this endpoint should sit behind whatever
-// probe cadence the platform applies, not on a request-per-second hot path.
+// With a *Marker signal, every request performs one os.Stat (see
+// Marker.CheckHealthy); keep this endpoint behind the platform's probe
+// cadence, not a request-per-second hot path.
 func Handler(s Signal) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		st := Status{Timestamp: time.Now().UTC().Format(time.RFC3339)}

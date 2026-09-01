@@ -77,10 +77,9 @@ func TestHandler_Unhealthy(t *testing.T) {
 }
 
 // TestHandler_emitsDocumentedWireShape pins the on-the-wire JSON contract
-// documented in README ({"status":"OK","timestamp":...}, mirroring
-// hellofresh/health-go). Existing tests decode into the Status struct, so a
-// json-tag rename round-trips cleanly and passes them all; this inspects the
-// raw body bytes and the RFC3339 timestamp, failing on such a rename.
+// ({"status":"OK","timestamp":...}). The other handler tests decode into
+// Status, so a json-tag rename would round-trip clean and pass them; this
+// inspects the raw body bytes and the RFC3339 timestamp instead.
 func TestHandler_emitsDocumentedWireShape(t *testing.T) {
 	okRec := httptest.NewRecorder()
 	Handler(stubSignal{healthy: true}).ServeHTTP(okRec, httptest.NewRequest(http.MethodGet, "/health", nil))

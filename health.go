@@ -1,46 +1,18 @@
-// Package health implements healthchecks for distroless containers.
+// Package health implements the file-marker healthcheck pattern for
+// distroless containers with no shell: the running process touches a
+// marker file at lifecycle points via Set, and a probe process (the
+// same binary re-invoked with a `health` subcommand) stats it via
+// RunProbe. The nested module github.com/cplieger/health/probe is the
+// HTTP-based counterpart for containers wrapping a third-party server.
 //
-// Docker's HEALTHCHECK needs a command inside the container, and
-// distroless images have no curl/wget/shell. This package covers the
-// two shapes that problem takes:
+// If the marker directory is not writable (e.g. compose's
+// `read_only: true` without a `tmpfs: /tmp` mount), the constructor
+// enters degraded mode: Set and Cleanup become no-ops, and the probe
+// reports healthy rather than restart-looping a container whose only
+// broken piece is the signaling channel.
 //
-//   - File marker (Marker, RunProbe): for containers whose main process
-//     is your own Go binary. The running process touches the file at
-//     DefaultPath at lifecycle points; the probe process (the same
-//     binary re-invoked with a `health` subcommand) stats it. The app
-//     owns the health decision via Set.
-//   - HTTP probe (the nested module github.com/cplieger/health/probe):
-//     for containers that wrap a third-party server which cannot
-//     cooperate with a Marker but already exposes an HTTP endpoint
-//     whose reachability IS the health signal. The standalone
-//     probe/cmd/probe binary is installed into the image and wired as
-//     the HEALTHCHECK.
-//
-// When you own the main process, prefer the file marker: Set expresses
-// application state a network GET cannot. The rest of this doc comment
-// describes the file-marker mode.
-//
-// Failure modes:
-//   - If the marker directory is not writable (typically compose declares
-//     `read_only: true` without a `tmpfs: /tmp` mount), the constructor
-//     logs one Warn with a fix hint and enters degraded mode. In degraded
-//     mode the long-running process treats Set / Cleanup as no-ops. The
-//     probe process independently detects the same condition and reports
-//     healthy, because the container is alive and the only broken piece
-//     is the signaling channel. Reporting unhealthy would trigger a
-//     Docker restart loop that cannot fix a compose misconfiguration.
-//   - Transient failures during Set are logged at Warn but do not change
-//     the marker's mode. A failed Set that leaves the marker absent on a
-//     still-writable directory (e.g. directory churn) surfaces at the next
-//     probe as unhealthy. A failure whose cause also leaves the directory
-//     unwritable (full tmpfs), and a failed Set(false) that leaves the marker
-//     present, are both reported healthy by the probe, matching the
-//     degraded-mode rationale above.
-//   - By default the probe checks existence only; staleness belongs to
-//     Docker's --interval at the orchestrator level. Apps whose resident
-//     loop refreshes the marker each cycle can opt into a freshness
-//     deadline with WithMaxAge, under which a wedged loop (marker present
-//     but old) probes unhealthy. See WithMaxAge for when not to arm it.
+// The probe checks existence only by default; an opt-in freshness
+// deadline is available via WithMaxAge.
 //
 // Logging goes through slog.Default(); configure it via slog.SetDefault
 // in main before constructing a Marker.
@@ -67,13 +39,10 @@ type Signal interface {
 	Healthy() bool
 }
 
-// Compile-time assertion: *Marker satisfies Signal.
 var _ Signal = (*Marker)(nil)
 
 // DefaultPath is the default marker location. Docker healthchecks
 // stat this path; the app creates and removes it at lifecycle points.
-// /tmp is conventional because compose services with read_only:true
-// typically mount /tmp as tmpfs.
 const DefaultPath = "/tmp/.healthy"
 
 // Marker implements the file-based distroless healthcheck pattern.
@@ -82,12 +51,12 @@ const DefaultPath = "/tmp/.healthy"
 // "health".
 type Marker struct {
 	path           string
-	loggedFailSigs []string // failure signatures (msg + error) already logged during the current streak
+	loggedFailSigs []string
 	mu             sync.Mutex
-	known          bool // true once Set has been called at least once
-	healthy        bool // last value SUCCESSFULLY applied to the marker
-	failed         bool // last filesystem op failed; gates duplicate warns
-	degraded       bool // true when marker dir is not writable
+	known          bool
+	healthy        bool
+	failed         bool
+	degraded       bool
 }
 
 // NewMarker constructs a marker for path and probes the parent
@@ -109,7 +78,7 @@ func NewMarker(path string) *Marker {
 }
 
 // Set records the current liveness state and touches or removes the
-// marker accordingly. Edge transitions (true↔false) are logged; repeated
+// marker accordingly. Edge transitions (true<->false) are logged; repeated
 // calls with the same value are silent. Safe to call from any goroutine.
 // In degraded mode Set is a no-op. A filesystem failure is logged and
 // swallowed; use SetChecked to observe it programmatically.
@@ -122,10 +91,7 @@ func (m *Marker) Set(ok bool) { _ = m.SetChecked(ok) }
 // contract includes the marker write — e.g. a one-shot scan subcommand
 // whose exit code an external scheduler alerts on, where a silently lost
 // heartbeat should fail the invocation loudly instead. In degraded mode
-// it returns nil: the marker channel is deliberately inert there (see
-// the package doc's failure modes), and propagating an error would turn
-// a compose misconfiguration into the restart or alert loop the degraded
-// design exists to avoid.
+// it returns nil, matching Set's no-op contract.
 func (m *Marker) SetChecked(ok bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -185,18 +151,11 @@ func (m *Marker) Cleanup() {
 	}
 }
 
-// CheckHealthy reports whether the marker file currently exists, at the cost
-// of one os.Stat per call — it is a filesystem check, not a cached field read,
-// which is why it carries a verb name. (It is deliberately NOT named Probe:
-// this package's probe-side vocabulary — RunProbe, ProbeCheck, the health/probe
-// module — reports healthy in degraded mode, and this method reports the
-// opposite.) Strict os.Stat: a degraded marker directory (read-only mount,
-// missing tmpfs) causes CheckHealthy to return false so an HTTP endpoint
-// honestly reports unhealthy.
-//
-// In degraded mode this intentionally diverges from ProbeCheck, which
-// returns 0 (healthy) to avoid a Docker restart loop. CheckHealthy returns
-// false because HTTP consumers deserve an honest signal; see package doc.
+// CheckHealthy reports whether the marker file currently exists via a
+// strict os.Stat, one call per invocation. Unlike RunProbe/ProbeCheck,
+// it reports false (not healthy) in degraded mode: an HTTP consumer via
+// Handler deserves an honest signal rather than the restart-loop
+// avoidance the file-probe side needs.
 func (m *Marker) CheckHealthy() bool {
 	if m == nil {
 		return false
@@ -206,9 +165,8 @@ func (m *Marker) CheckHealthy() bool {
 }
 
 // Healthy satisfies the Signal interface by delegating to
-// [Marker.CheckHealthy]; it exists so a *Marker can be handed to Handler and
-// any other Signal consumer. It inherits CheckHealthy's cost: one os.Stat per
-// call, not a field read.
+// [Marker.CheckHealthy]. It inherits CheckHealthy's cost: one os.Stat
+// per call, not a field read.
 func (m *Marker) Healthy() bool { return m.CheckHealthy() }
 
 // ProbeOption configures the probe-side health decision (RunProbe and
@@ -223,10 +181,9 @@ type probeConfig struct {
 // WithMaxAge arms an opt-in freshness deadline: a marker older than d
 // is unhealthy (exit 1), turning the signal from a level ("the app
 // last reported healthy") into a lease ("the app recently proved
-// progress"). The writing side needs no new calls: every Set(true)
-// refreshes the marker's mtime, so an app that already calls Set(true)
-// once per work cycle gets heartbeat semantics by passing this option
-// to RunProbe in its health subcommand.
+// progress"). Every Set(true) refreshes the marker's mtime, so an app
+// that already calls Set(true) once per work cycle gets heartbeat
+// semantics by passing this option to RunProbe in its health subcommand.
 //
 // Arm it only where the resident process runs its own bounded work
 // cycle at a known cadence, so a stale marker means a wedged loop that
@@ -241,12 +198,11 @@ func WithMaxAge(d time.Duration) ProbeOption {
 	return func(c *probeConfig) { c.maxAge = d }
 }
 
-// MarkerState is what a single look at a health marker found. It is the
-// vocabulary Inspect answers in, and it exists because the probe's exit code
-// cannot express the difference between the two things an operator acts on
-// differently: a marker that is STALE says the writing loop is wedged and a
-// restart may clear it, while one that is ABSENT says nothing has written it yet
-// (a cold start, or a wiped volume) and a restart changes nothing.
+// MarkerState is what a single look at a health marker found: STALE
+// means the writing loop is wedged and a restart may clear it; ABSENT
+// means nothing has written it yet (cold start, wiped volume) and a
+// restart changes nothing. The 0/1 probe exit code cannot express that
+// difference; Inspect's Freshness can.
 type MarkerState int
 
 const (
@@ -260,10 +216,9 @@ const (
 	// MarkerUnreadable is a marker whose stat failed for a reason other than
 	// absence (permission, symlink loop, I/O) in a usable directory.
 	MarkerUnreadable
-	// MarkerDirUnavailable is the DEGRADED mode: the marker's directory cannot
-	// be written, so the app has no way to signal through the filesystem at all
-	// and its silence is not evidence of ill health. The probe treats this as
-	// healthy on purpose; see RunProbe.
+	// MarkerDirUnavailable is degraded mode: the marker's directory cannot be
+	// written, so the app has no way to signal through the filesystem at all.
+	// The probe treats this as healthy; see RunProbe.
 	MarkerDirUnavailable
 )
 
@@ -285,15 +240,10 @@ func (s MarkerState) String() string {
 }
 
 // Freshness is one look at a health marker: what state it is in, how old it is,
-// and why the stat failed when it did.
-//
-// It exists because ProbeCheck answers 0-or-1 and throws away two values the
-// decision already computed. A caller that wants to ACT on marker freshness
-// in-process - a resident daemon watching its own work loop for a wedge, rather
-// than a `health` subcommand exiting for a container healthcheck - needs the age
-// to report it and needs stale distinguished from absent to avoid calling a cold
-// start a wedge. Without this it had to re-stat the file the library had just
-// stat'ed, which is a second implementation of the same reading.
+// and why the stat failed when it did. A caller acting on marker freshness
+// in-process (a resident daemon watching its own work loop for a wedge) needs
+// the age and needs stale distinguished from absent to avoid calling a cold
+// start a wedge.
 type Freshness struct {
 	// Err is the underlying stat or directory-probe error for MarkerUnreadable
 	// and MarkerDirUnavailable, nil otherwise.
@@ -301,15 +251,13 @@ type Freshness struct {
 	// Age is how long ago the marker was last written. Meaningful only for
 	// MarkerFresh and MarkerStale; zero for every state with no marker to age.
 	Age time.Duration
-	// MaxAge is the armed deadline, or 0 when none was armed. Carried so a
-	// caller can log the lease it judged against without re-deriving it.
+	// MaxAge is the armed deadline, or 0 when none was armed.
 	MaxAge time.Duration
 	State  MarkerState
 }
 
-// Healthy reports whether this reading is the probe's healthy verdict, so the
-// exit-code and the structured readings can never disagree: a fresh marker, or a
-// directory the app cannot signal through at all.
+// Healthy reports whether this reading is the probe's healthy verdict: a
+// fresh marker, or a directory the app cannot signal through at all.
 func (f Freshness) Healthy() bool {
 	return f.State == MarkerFresh || f.State == MarkerDirUnavailable
 }
@@ -332,14 +280,12 @@ func (f Freshness) Reason() string {
 }
 
 // Inspect reads a health marker and reports what it found, without deciding
-// anything or exiting. It is the one implementation of the freshness reading;
-// RunProbe and ProbeCheck are presentations of it, so a caller acting on
-// Inspect's result and a container healthcheck reading the exit code cannot
-// diverge.
+// anything or exiting. RunProbe and ProbeCheck are presentations of it, so a
+// caller acting on Inspect's result and a container healthcheck reading the
+// exit code cannot diverge.
 //
-// The options are the probe's: pass WithMaxAge to arm the lease, and read
-// MarkerStale to detect a wedged loop. Without it a present marker is always
-// MarkerFresh, because existence is the only claim being made.
+// Pass WithMaxAge to arm the lease, and read MarkerStale to detect a wedged
+// loop. Without it a present marker is always MarkerFresh.
 func Inspect(path string, opts ...ProbeOption) Freshness {
 	var cfg probeConfig
 	for _, o := range opts {
@@ -354,9 +300,8 @@ func Inspect(path string, opts ...ProbeOption) Freshness {
 		}
 		return Freshness{State: state, Age: age, MaxAge: cfg.maxAge}
 	}
-	// The directory probe runs BEFORE classifying the stat error, and its
-	// success is what makes absence meaningful: a marker missing from a
-	// directory nothing can write to is not evidence the app is unhealthy.
+	// A directory nothing can write to explains absence without implicating
+	// app health, so the dir probe runs before classifying the stat error.
 	if dirErr := probeHealthDir(path); dirErr != nil {
 		return Freshness{State: MarkerDirUnavailable, MaxAge: cfg.maxAge, Err: dirErr}
 	}
@@ -371,9 +316,9 @@ func Inspect(path string, opts ...ProbeOption) Freshness {
 // the marker directory is unwritable (degraded mode: the long-running
 // process cannot signal through the filesystem, so the probe falls
 // back to "alive"). It exits 1 when the marker is absent from a
-// writable directory or stale past an armed deadline, which are the
-// real unhealthy signals; the stderr diagnostic names the underlying
-// stat failure when the cause is something other than absence.
+// writable directory or stale past an armed deadline; the stderr
+// diagnostic names the underlying stat failure when the cause is
+// something other than absence.
 func RunProbe(path string, opts ...ProbeOption) {
 	code, reason := probeCheck(path, opts...)
 	if code != 0 {
@@ -393,14 +338,12 @@ func ProbeCheck(path string, opts ...ProbeOption) int {
 // probeCheck carries the shared probe decision plus the operator-facing
 // diagnostic for the unhealthy exit: "marker absent" for the common
 // ENOENT case, a stale-age line when an armed WithMaxAge deadline is
-// exceeded, and the underlying stat error for anything else
-// (permission, symlink loop, I/O), so RunProbe does not mislabel those
-// as absence.
+// exceeded, and the underlying stat error otherwise (permission,
+// symlink loop, I/O), so RunProbe does not mislabel those as absence.
 //
-// It is a PRESENTATION of Inspect rather than a second reading: one
-// implementation decides, and the exit code and the structured result are two
-// views of it. A caller acting on Inspect and a container healthcheck reading
-// this exit code therefore cannot disagree.
+// It is a presentation of Inspect, not a second reading: one
+// implementation decides, and the exit code and the structured result
+// are two views of it (pinned by TestInspectAndProbeCheckCannotDisagree).
 func probeCheck(path string, opts ...ProbeOption) (code int, reason string) {
 	f := Inspect(path, opts...)
 	if f.Healthy() {
@@ -409,16 +352,11 @@ func probeCheck(path string, opts ...ProbeOption) (code int, reason string) {
 	return 1, f.Reason()
 }
 
-// --- helpers ---
-
 // warnFailure logs a filesystem-op failure once per distinct (message,
 // error) signature per streak, keying on both the static message AND the
-// underlying error. A repeated identical failure stays silent (anti-spam),
-// while a new message OR a new underlying error arising mid-streak still
-// surfaces exactly once. This closes two facets of the coarser single-slot
-// de-dup: alternating branch messages no longer re-spam within one streak,
-// and a same-branch root-cause change (e.g. ENOSPC then EACCES) is no longer
-// masked. Then it marks the marker failed. Caller holds m.mu.
+// underlying error. A repeated identical failure stays silent, while a
+// new message OR a new underlying error arising mid-streak still
+// surfaces exactly once. Then it marks the marker failed. Caller holds m.mu.
 func (m *Marker) warnFailure(msg string, err error) {
 	if !m.failed {
 		m.loggedFailSigs = m.loggedFailSigs[:0]

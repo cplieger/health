@@ -15,8 +15,8 @@ import (
 	"pgregory.net/rapid"
 )
 
-// TestHealthMarker_SetCreatesAndRemoves covers the happy path: a writable
-// dir, Set(true) creates the marker, Set(false) removes it.
+// TestHealthMarker_SetCreatesAndRemoves covers the happy path: Set(true)
+// creates the marker, Set(false) removes it.
 func TestHealthMarker_SetCreatesAndRemoves(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".healthy")
 	m := NewMarker(path)
@@ -44,15 +44,13 @@ func TestHealthMarker_Cleanup(t *testing.T) {
 		t.Fatalf("marker should be gone after Cleanup: %v", err)
 	}
 
-	// Second cleanup must not error.
-	m.Cleanup()
+	m.Cleanup() // must not error
 }
 
 // TestHealthMarker_DegradedMode verifies that when the marker directory
 // is not writable, the marker enters degraded mode: Set and Cleanup are
 // no-ops and no file is ever created.
 func TestHealthMarker_DegradedMode(t *testing.T) {
-	// Create a read-only directory to simulate a compose misconfiguration.
 	dir := filepath.Join(t.TempDir(), "ro")
 	if err := os.Mkdir(dir, 0o500); err != nil {
 		t.Fatalf("mkdir ro: %v", err)
@@ -62,10 +60,7 @@ func TestHealthMarker_DegradedMode(t *testing.T) {
 	m := NewMarker(path)
 
 	if !m.degraded {
-		// Some environments (root, permissive filesystems like Windows
-		// or containers) allow writes through 0500; skip rather than
-		// fail in those cases.
-		t.Skip("test environment bypasses directory mode; skipping")
+		t.Skip("test environment bypasses directory mode; skipping") // root/Windows may allow writes through 0500
 	}
 
 	m.Set(true)
@@ -101,8 +96,6 @@ func TestHealthMarker_Idempotent(t *testing.T) {
 func TestHealthMarker_Property(t *testing.T) {
 	dir := t.TempDir()
 	rapid.Check(t, func(rt *rapid.T) {
-		// A fresh subdir per iteration so markers from earlier iterations
-		// don't leak into later ones.
 		nonce := rapid.StringMatching(`[a-z0-9]{8}`).Draw(rt, "nonce")
 		subdir := filepath.Join(dir, nonce)
 		if err := os.Mkdir(subdir, 0o755); err != nil {
@@ -264,7 +257,7 @@ func TestHealthMarker_SetTrue_refreshesMtime(t *testing.T) {
 		t.Fatalf("backdate marker: %v", err)
 	}
 
-	m.Set(true) // repeated same-value Set must still touch the file
+	m.Set(true) // repeated Set must still refresh mtime
 
 	info, err := os.Stat(path)
 	if err != nil {
@@ -297,14 +290,11 @@ func TestProbeCheck_statFailure_diagnostic(t *testing.T) {
 	}
 }
 
-// TestHealthMarker_Healthy covers the Healthy() method so consumers can
-// use *Marker via the Signal interface. The method checks
-// marker-file presence via strict os.Stat.
+// TestHealthMarker_Healthy covers the Signal interface method.
 func TestHealthMarker_Healthy(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".healthy")
 	m := NewMarker(path)
 
-	// Before any Set, the file does not exist — Healthy is false.
 	if m.Healthy() {
 		t.Error("Healthy() = true before Set(true), want false")
 	}
@@ -476,8 +466,7 @@ func TestHealthMarker_SetWriteFailure_logsRecoveryAfterStreak(t *testing.T) {
 		t.Skip("parent dir not writable in this environment; skipping")
 	}
 
-	// Arrange a failure streak: the marker path is a directory, so this
-	// Set(true) fails and flags the marker failed.
+	// The marker path is a directory, so this Set(true) fails and flags the streak.
 	m.Set(true)
 
 	var buf bytes.Buffer
@@ -645,12 +634,9 @@ func TestRunProbe_unhealthy_emitsDiagnostic(t *testing.T) {
 	}
 }
 
-// TestHealthMarker_Set_transitionLoggingSilentOnRepeat pins the documented
-// edge-transition logging contract (go.md: repeated calls with the same value
-// are silent so per-tick scheduler flips do not spam Loki). Set already has 100%
-// statement coverage; this asserts the `changed` gate by counting transitions.
-// A regression that logs on every call (mutant changed := true) passes every
-// other test but fails here.
+// TestHealthMarker_Set_transitionLoggingSilentOnRepeat pins the edge-transition
+// logging contract: repeated Set calls with the same value stay silent. A
+// mutant that logs on every call (changed := true) passes every other test.
 func TestHealthMarker_Set_transitionLoggingSilentOnRepeat(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".healthy")
 	m := NewMarker(path)
@@ -679,10 +665,8 @@ func TestHealthMarker_Set_transitionLoggingSilentOnRepeat(t *testing.T) {
 }
 
 // TestHealthMarker_Set_firstSetFalseAnnouncesState pins the `!m.known` term:
-// the documented startup pattern calls Set(false) once to clear stale state
-// before Set(true), and that first call must announce the initial state even
-// though false equals the zero value of m.healthy. A mutant dropping !m.known
-// swallows this log yet passes every other test.
+// the first Set call must announce state even though false equals the zero
+// value of m.healthy. A mutant dropping !m.known swallows this log.
 func TestHealthMarker_Set_firstSetFalseAnnouncesState(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".healthy")
 	m := NewMarker(path)
@@ -704,10 +688,9 @@ func TestHealthMarker_Set_firstSetFalseAnnouncesState(t *testing.T) {
 	}
 }
 
-// TestNewMarker_degraded_logsHintOnce asserts the operator-facing degraded
-// contract: NewMarker on an unwritable dir emits exactly one WARN carrying the
-// compose-fix hint. Existing degraded tests assert only no-op file behavior, so
-// a regression dropping the hint (or the Warn) would be invisible.
+// TestNewMarker_degraded_logsHintOnce pins the degraded-construction WARN:
+// NewMarker on an unwritable dir emits exactly one, carrying the compose-fix
+// hint. Other degraded tests assert only no-op file behavior.
 func TestNewMarker_degraded_logsHintOnce(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "ro")
 	if err := os.Mkdir(dir, 0o500); err != nil {
@@ -737,14 +720,10 @@ func TestNewMarker_degraded_logsHintOnce(t *testing.T) {
 }
 
 // TestHealthMarker_Set_recoveryLogsOnFalseBranchAfterStreak pins the
-// `recovered` term of Set's Set(false) branch. Its Set(true) twin is covered
-// by TestHealthMarker_SetWriteFailure_logsRecoveryAfterStreak, but the
-// symmetric false-branch recovery log has no test: a mutant weakening
-// `changed || recovered` to `changed` on the remove path passes every other
-// test. The sequence drives the marker to known=true, healthy=false,
-// failed=true (a clean Set(false), then a Set(true) that fails because the
-// path is a directory), so the final successful Set(false) has changed=false
-// and logs only via the recovered term.
+// `recovered` term on the Set(false) branch (the Set(true) twin is
+// TestHealthMarker_SetWriteFailure_logsRecoveryAfterStreak). The sequence
+// drives known=true, healthy=false, failed=true, so the final successful
+// Set(false) has changed=false and logs only via recovered.
 func TestHealthMarker_Set_recoveryLogsOnFalseBranchAfterStreak(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".healthy")
@@ -754,13 +733,10 @@ func TestHealthMarker_Set_recoveryLogsOnFalseBranchAfterStreak(t *testing.T) {
 		t.Skip("parent dir not writable in this environment; skipping")
 	}
 
-	// known=true, healthy=false via a clean Set(false) (marker absent, remove
-	// is a no-op).
-	m.Set(false)
+	m.Set(false) // known=true, healthy=false via a no-op remove
 
-	// Make the marker path an empty directory: the next Set(true) fails
-	// (os.Create on a dir errors) and flags the marker failed, but a later
-	// os.Remove of the empty dir still succeeds.
+	// An empty directory: the next Set(true) fails (os.Create on a dir
+	// errors) but a later os.Remove of the empty dir still succeeds.
 	if err := os.Mkdir(path, 0o755); err != nil {
 		t.Fatalf("mkdir marker-as-dir: %v", err)
 	}
@@ -771,10 +747,7 @@ func TestHealthMarker_Set_recoveryLogsOnFalseBranchAfterStreak(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
-	// Set(false) now succeeds (removes the empty dir). healthy is already
-	// false so changed=false; the recovery WARN fires only via the recovered
-	// term as the failure streak clears.
-	m.Set(false)
+	m.Set(false) // removes the empty dir; recovery fires via recovered only
 
 	log := buf.String()
 	if got := strings.Count(log, `msg="health state changed" healthy=false`); got != 1 {
@@ -782,14 +755,10 @@ func TestHealthMarker_Set_recoveryLogsOnFalseBranchAfterStreak(t *testing.T) {
 	}
 }
 
-// TestHealthMarker_SetFailureWarnDedupAlternatingBranches pins the
-// per-signature de-dup contract across alternating failing branches in a
-// single streak. With the marker path a non-empty directory, both Set(true)
-// (os.Create fails) and Set(false) (os.Remove of a non-empty dir fails) keep
-// failing, so an alternating Set(true)/Set(false) sequence toggles between the
-// create and remove messages. The de-dup must key on the (message, error)
-// signature set for the streak, emitting exactly one Warn per distinct
-// message rather than re-logging on every toggle.
+// TestHealthMarker_SetFailureWarnDedupAlternatingBranches pins per-signature
+// de-dup across alternating failing branches in one streak: the marker path
+// is a non-empty directory, so both Set(true) and Set(false) fail, and the
+// de-dup must key on the (message, error) set rather than re-logging on toggle.
 func TestHealthMarker_SetFailureWarnDedupAlternatingBranches(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".healthy")
@@ -926,14 +895,9 @@ func markerAged(t *testing.T, age time.Duration) string {
 	return path
 }
 
-// TestInspect_states covers the reading Inspect exists to expose: the two things
-// the exit code cannot tell apart, plus the age it used to discard.
-//
-// STALE and ABSENT are the pair that matters. Both exit 1, so a caller acting on
-// ProbeCheck alone cannot distinguish "the work loop is wedged, a restart may
-// clear it" from "nothing has written this yet (cold start, wiped volume), a
-// restart changes nothing" - which is why the caller that wanted to act in-process
-// had to re-stat the file the library had just stat'ed.
+// TestInspect_states covers what Inspect exposes: the pair the exit code
+// cannot distinguish (stale = wedged loop, a restart may help; absent =
+// cold start or wiped volume, a restart changes nothing), plus age.
 func TestInspect_states(t *testing.T) {
 	t.Run("fresh within an armed deadline", func(t *testing.T) {
 		got := Inspect(markerAged(t, time.Second), WithMaxAge(time.Hour))
@@ -963,7 +927,7 @@ func TestInspect_states(t *testing.T) {
 			t.Error("a stale marker must not be Healthy")
 		}
 		if got.Age < 2*time.Hour {
-			t.Errorf("age = %s, want at least the 2h backdate - the age is the value a caller cannot recover from an exit code", got.Age)
+			t.Errorf("age = %s, want at least the 2h backdate", got.Age)
 		}
 		if !strings.Contains(got.Reason(), "marker stale") {
 			t.Errorf("reason = %q, want it to name staleness", got.Reason())
@@ -971,8 +935,6 @@ func TestInspect_states(t *testing.T) {
 	})
 
 	t.Run("present with no deadline armed is always fresh", func(t *testing.T) {
-		// Existence-only is the library's default and stays so: freshness is
-		// opt-in per app via WithMaxAge.
 		got := Inspect(markerAged(t, 100*time.Hour))
 		if got.State != MarkerFresh {
 			t.Errorf("state = %v, want MarkerFresh with no deadline armed", got.State)
@@ -991,7 +953,7 @@ func TestInspect_states(t *testing.T) {
 			t.Error("an absent marker in a usable directory must not be Healthy")
 		}
 		if got.Age != 0 {
-			t.Errorf("age = %s, want 0 - there is no marker to age", got.Age)
+			t.Errorf("age = %s, want 0", got.Age)
 		}
 		if got.Reason() != "unhealthy: marker absent" {
 			t.Errorf("reason = %q, want the absence diagnostic", got.Reason())
@@ -1029,19 +991,18 @@ func TestInspect_states(t *testing.T) {
 			t.Fatalf("state = %v, want MarkerDirUnavailable", got.State)
 		}
 		if !got.Healthy() {
-			t.Error("degraded mode must stay Healthy: the app has no way to signal at all, so silence is not evidence of ill health")
+			t.Error("degraded mode must stay Healthy: silence is not evidence of ill health")
 		}
 		if got.Reason() != "" {
-			t.Errorf("reason = %q, want empty - degraded is not an unhealthy verdict", got.Reason())
+			t.Errorf("reason = %q, want empty", got.Reason())
 		}
 	})
 }
 
-// TestInspectAndProbeCheckCannotDisagree is the property that justifies
-// reimplementing probeCheck on top of Inspect rather than leaving two readings:
-// the exit code a container healthcheck sees and the structured result a caller
-// acts on must be two views of ONE decision. If they ever diverge, an app can
-// restart itself on a verdict its own healthcheck disagrees with.
+// TestInspectAndProbeCheckCannotDisagree pins that the exit code a container
+// healthcheck sees and the structured Freshness a caller acts on are two
+// views of one decision; a divergence would let an app restart itself on a
+// verdict its own healthcheck disagrees with.
 func TestInspectAndProbeCheckCannotDisagree(t *testing.T) {
 	loop := filepath.Join(t.TempDir(), "loop")
 	_ = os.Symlink(loop, loop)

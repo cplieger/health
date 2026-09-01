@@ -1,13 +1,8 @@
 // Package probe implements an HTTP liveness probe for containers
-// without a shell.
-//
-// It is the HTTP counterpart of the file marker in the parent module
-// (github.com/cplieger/health), for containers that wrap a third-party
-// server (Caddy, a reverse proxy, an upstream daemon) which cannot
-// cooperate with a Marker but already exposes an HTTP endpoint whose
-// reachability IS the health signal. When you own the main process,
-// prefer the file marker: the app aggregates its own state via Set,
-// which a network GET cannot express.
+// without a shell: the HTTP counterpart of the file marker in the
+// parent module (github.com/cplieger/health), for containers that wrap
+// a third-party server which cannot cooperate with a Marker but already
+// exposes an HTTP endpoint whose reachability IS the health signal.
 //
 // The ready-made binary around this package lives in cmd/probe; bake it
 // into the image and wire it as the Docker HEALTHCHECK.
@@ -23,10 +18,9 @@ import (
 )
 
 // DefaultTimeout is the default total wall-clock budget for one probe
-// run (all URLs together). Five seconds matches the classic
-// BusyBox-wget healthcheck recipes this probe replaces and sits below
-// Docker's default HEALTHCHECK --timeout, so a hung endpoint fails with
-// a written reason instead of a SIGKILL from the runtime.
+// run (all URLs together). Five seconds sits below Docker's default
+// HEALTHCHECK --timeout, so a hung endpoint fails with a written
+// reason instead of a SIGKILL from the runtime.
 const DefaultTimeout = 5 * time.Second
 
 // URL performs a single liveness GET against url and returns nil when
@@ -50,9 +44,8 @@ func URL(ctx context.Context, url string) error {
 
 // Check probes every URL within one shared timeout budget and returns
 // 0 when all succeed, 1 otherwise, writing one line per failure to w.
-// It deliberately probes ALL URLs rather than stopping at the first
-// failure, so a multi-surface healthcheck (e.g. a serving route plus an
-// admin endpoint) reports every broken surface in one run.
+// It probes ALL URLs rather than stopping at the first failure, so a
+// multi-surface healthcheck reports every broken surface in one run.
 //
 // Zero URLs is reported unhealthy: an empty probe answering "healthy"
 // would silently mask a misconfigured HEALTHCHECK. A non-positive
