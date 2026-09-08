@@ -3,6 +3,7 @@ package health
 import (
 	"bytes"
 	"errors"
+	"log"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -420,6 +421,52 @@ func TestHealthMarker_SetRemoveFailure(t *testing.T) {
 	}
 }
 
+// captureLogs makes a text handler over a fresh buffer slog's default for the
+// test's duration and returns the buffer. Callers must be serial (no
+// t.Parallel): the default logger is a process global.
+//
+// slog.SetDefault also points the standard log package at the installed
+// handler, and it skips that redirect when the logger being installed carries
+// slog's own default handler. Reinstalling the previous logger therefore does
+// not undo the redirect, so the writer and flags are saved and restored
+// explicitly. slog goes back first: reinstalling a previous handler that is not
+// slog's default re-runs the redirect and would overwrite a log restore done
+// before it.
+func captureLogs(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	buf := &bytes.Buffer{}
+	prev, prevWriter, prevFlags := slog.Default(), log.Writer(), log.Flags()
+	slog.SetDefault(slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	t.Cleanup(func() {
+		slog.SetDefault(prev)
+		log.SetOutput(prevWriter)
+		log.SetFlags(prevFlags)
+	})
+	return buf
+}
+
+// TestCaptureLogsRestoresLogGlobals pins the restore in captureLogs: the swap
+// redirects the standard log package's writer and zeroes its flags, and the
+// cleanup must put both back. Without it, one test silences slog for the rest
+// of the package, because slog's own default handler writes through log.Output.
+func TestCaptureLogsRestoresLogGlobals(t *testing.T) {
+	wantWriter, wantFlags := log.Writer(), log.Flags()
+
+	t.Run("swap", func(t *testing.T) {
+		captureLogs(t)
+		if log.Writer() == wantWriter {
+			t.Fatal("captureLogs did not redirect log.Writer(); the restore under test would guard nothing")
+		}
+	})
+
+	if got := log.Writer(); got != wantWriter {
+		t.Errorf("log.Writer() after captureLogs cleanup = %#v, want the original %#v", got, wantWriter)
+	}
+	if got := log.Flags(); got != wantFlags {
+		t.Errorf("log.Flags() after captureLogs cleanup = %d, want %d", got, wantFlags)
+	}
+}
+
 // TestHealthMarker_SetWriteFailure_warnsOncePerStreak verifies the
 // failure-gating contract: under a persistent write failure Set emits
 // exactly one Warn, not one per call, so a stuck marker directory does
@@ -436,10 +483,7 @@ func TestHealthMarker_SetWriteFailure_warnsOncePerStreak(t *testing.T) {
 		t.Skip("parent dir not writable in this environment; skipping")
 	}
 
-	var buf bytes.Buffer
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
-	t.Cleanup(func() { slog.SetDefault(prev) })
+	buf := captureLogs(t)
 
 	// Marker path is a directory, so os.Create fails on every call.
 	m.Set(true)
@@ -469,10 +513,7 @@ func TestHealthMarker_SetWriteFailure_logsRecoveryAfterStreak(t *testing.T) {
 	// The marker path is a directory, so this Set(true) fails and flags the streak.
 	m.Set(true)
 
-	var buf bytes.Buffer
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
-	t.Cleanup(func() { slog.SetDefault(prev) })
+	buf := captureLogs(t)
 
 	// Clear the blocker so the next write succeeds and recovers.
 	if err := os.Remove(path); err != nil {
@@ -505,10 +546,7 @@ func TestHealthMarker_SetRemoveFailureWarnDedup(t *testing.T) {
 		t.Skip("parent dir not writable in this environment; skipping")
 	}
 
-	var buf bytes.Buffer
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
-	t.Cleanup(func() { slog.SetDefault(prev) })
+	buf := captureLogs(t)
 
 	// Non-empty directory -> os.Remove fails with non-ErrNotExist.
 	m.Set(false)
@@ -644,10 +682,7 @@ func TestHealthMarker_Set_transitionLoggingSilentOnRepeat(t *testing.T) {
 		t.Skip("parent dir not writable in this environment; skipping")
 	}
 
-	var buf bytes.Buffer
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
-	t.Cleanup(func() { slog.SetDefault(prev) })
+	buf := captureLogs(t)
 
 	m.Set(true)  // transition false->true: one INFO
 	m.Set(true)  // repeat: silent
@@ -655,12 +690,12 @@ func TestHealthMarker_Set_transitionLoggingSilentOnRepeat(t *testing.T) {
 	m.Set(false) // transition true->false: one WARN
 	m.Set(false) // repeat: silent
 
-	log := buf.String()
-	if got := strings.Count(log, `msg="health state changed" healthy=true`); got != 1 {
-		t.Errorf("Set(true) edge-transition logs = %d, want exactly 1\nlog:\n%s", got, log)
+	logged := buf.String()
+	if got := strings.Count(logged, `msg="health state changed" healthy=true`); got != 1 {
+		t.Errorf("Set(true) edge-transition logs = %d, want exactly 1\nlog:\n%s", got, logged)
 	}
-	if got := strings.Count(log, `msg="health state changed" healthy=false`); got != 1 {
-		t.Errorf("Set(false) edge-transition logs = %d, want exactly 1\nlog:\n%s", got, log)
+	if got := strings.Count(logged, `msg="health state changed" healthy=false`); got != 1 {
+		t.Errorf("Set(false) edge-transition logs = %d, want exactly 1\nlog:\n%s", got, logged)
 	}
 }
 
@@ -674,17 +709,14 @@ func TestHealthMarker_Set_firstSetFalseAnnouncesState(t *testing.T) {
 		t.Skip("parent dir not writable in this environment; skipping")
 	}
 
-	var buf bytes.Buffer
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
-	t.Cleanup(func() { slog.SetDefault(prev) })
+	buf := captureLogs(t)
 
 	m.Set(false) // first call on a fresh marker: announces initial state
 	m.Set(false) // repeat: silent
 
-	log := buf.String()
-	if got := strings.Count(log, `msg="health state changed" healthy=false`); got != 1 {
-		t.Errorf("first Set(false) announce logs = %d, want exactly 1\nlog:\n%s", got, log)
+	logged := buf.String()
+	if got := strings.Count(logged, `msg="health state changed" healthy=false`); got != 1 {
+		t.Errorf("first Set(false) announce logs = %d, want exactly 1\nlog:\n%s", got, logged)
 	}
 }
 
@@ -697,25 +729,22 @@ func TestNewMarker_degraded_logsHintOnce(t *testing.T) {
 		t.Fatalf("mkdir ro: %v", err)
 	}
 
-	var buf bytes.Buffer
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
-	t.Cleanup(func() { slog.SetDefault(prev) })
+	buf := captureLogs(t)
 
 	m := NewMarker(filepath.Join(dir, ".healthy"))
 	if !m.degraded {
 		t.Skip("test environment bypasses directory mode; skipping")
 	}
 
-	log := buf.String()
-	if got := strings.Count(log, "health marker directory not writable"); got != 1 {
-		t.Errorf("degraded-construction WARN count = %d, want exactly 1\nlog:\n%s", got, log)
+	logged := buf.String()
+	if got := strings.Count(logged, "health marker directory not writable"); got != 1 {
+		t.Errorf("degraded-construction WARN count = %d, want exactly 1\nlog:\n%s", got, logged)
 	}
-	if !strings.Contains(log, "level=WARN") {
-		t.Errorf("degraded construction must log at WARN; log:\n%s", log)
+	if !strings.Contains(logged, "level=WARN") {
+		t.Errorf("degraded construction must log at WARN; log:\n%s", logged)
 	}
-	if !strings.Contains(log, "hint=") || !strings.Contains(log, "tmpfs") {
-		t.Errorf("degraded WARN must carry a compose-fix hint mentioning tmpfs; log:\n%s", log)
+	if !strings.Contains(logged, "hint=") || !strings.Contains(logged, "tmpfs") {
+		t.Errorf("degraded WARN must carry a compose-fix hint mentioning tmpfs; log:\n%s", logged)
 	}
 }
 
@@ -742,16 +771,13 @@ func TestHealthMarker_Set_recoveryLogsOnFalseBranchAfterStreak(t *testing.T) {
 	}
 	m.Set(true) // fails: flags failed=true, healthy stays false
 
-	var buf bytes.Buffer
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
-	t.Cleanup(func() { slog.SetDefault(prev) })
+	buf := captureLogs(t)
 
 	m.Set(false) // removes the empty dir; recovery fires via recovered only
 
-	log := buf.String()
-	if got := strings.Count(log, `msg="health state changed" healthy=false`); got != 1 {
-		t.Errorf("recovery WARN on false-branch after streak = %d, want exactly 1\nlog:\n%s", got, log)
+	logged := buf.String()
+	if got := strings.Count(logged, `msg="health state changed" healthy=false`); got != 1 {
+		t.Errorf("recovery WARN on false-branch after streak = %d, want exactly 1\nlog:\n%s", got, logged)
 	}
 }
 
@@ -774,22 +800,19 @@ func TestHealthMarker_SetFailureWarnDedupAlternatingBranches(t *testing.T) {
 		t.Skip("parent dir not writable in this environment; skipping")
 	}
 
-	var buf bytes.Buffer
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
-	t.Cleanup(func() { slog.SetDefault(prev) })
+	buf := captureLogs(t)
 
 	m.Set(true)
 	m.Set(false)
 	m.Set(true)
 	m.Set(false)
 
-	log := buf.String()
-	if got := strings.Count(log, "failed to create health marker"); got != 1 {
-		t.Errorf("want exactly 1 create-failure Warn in one streak, got %d\nlog:\n%s", got, log)
+	logged := buf.String()
+	if got := strings.Count(logged, "failed to create health marker"); got != 1 {
+		t.Errorf("want exactly 1 create-failure Warn in one streak, got %d\nlog:\n%s", got, logged)
 	}
-	if got := strings.Count(log, "failed to remove health marker"); got != 1 {
-		t.Errorf("want exactly 1 remove-failure Warn in one streak, got %d\nlog:\n%s", got, log)
+	if got := strings.Count(logged, "failed to remove health marker"); got != 1 {
+		t.Errorf("want exactly 1 remove-failure Warn in one streak, got %d\nlog:\n%s", got, logged)
 	}
 }
 
