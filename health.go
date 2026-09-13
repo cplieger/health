@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -193,9 +194,69 @@ type probeConfig struct {
 // stopped firing. Marker.Healthy (and therefore Handler) stays
 // existence-based regardless of this option.
 //
-// A non-positive d disables the deadline (same as omitting the option).
+// A non-positive d disables the deadline (same as omitting the option), so
+// derive d with [Lease]: multiplying an operator-supplied interval inline can
+// wrap to a negative d, which this option cannot tell from that disable.
 func WithMaxAge(d time.Duration) ProbeOption {
 	return func(c *probeConfig) { c.maxAge = d }
+}
+
+const maxDuration = time.Duration(math.MaxInt64)
+
+// Lease derives a probe-side freshness deadline for [WithMaxAge] from an app's
+// own cadence: Cycles refresh intervals plus Attempts work timeouts, never
+// shorter than Floor. The zero value is a disabled lease reporting 0, so an
+// externally-triggered or one-shot app passes a zero Lease and stays
+// level-based. Interval alone decides that; every other field contributes
+// nothing when non-positive. [Lease.Duration] saturates at the largest
+// time.Duration rather than wrapping, because a wrapped negative deadline is
+// indistinguishable from that deliberate disable.
+type Lease struct {
+	// Interval is the cadence at which the running process refreshes the
+	// marker. A non-positive Interval disables the lease outright, whatever
+	// the other fields hold: an app with no cadence has no wedge to detect.
+	Interval time.Duration
+	// Timeout is the longest one unit of work may legitimately take.
+	Timeout time.Duration
+	// Floor is the shortest deadline to arm. It applies only once Interval is
+	// positive, so it can never arm a lease the Interval disabled.
+	Floor time.Duration
+	// Cycles is how many missed refreshes to tolerate. Non-positive counts as none.
+	Cycles int
+	// Attempts is how many Timeout budgets one refresh may spend. Non-positive
+	// counts as none.
+	Attempts int
+}
+
+// Duration reports the deadline to pass to [WithMaxAge]: 0 when the lease is
+// disabled, otherwise a positive duration that saturates at the largest
+// time.Duration rather than wrapping through zero.
+func (l Lease) Duration() time.Duration {
+	if l.Interval <= 0 {
+		return 0
+	}
+	d := addSaturating(scale(l.Interval, l.Cycles), scale(l.Timeout, l.Attempts))
+	return max(d, l.Floor)
+}
+
+// scale multiplies d by n, saturating at maxDuration instead of wrapping. A
+// non-positive d or n contributes nothing.
+func scale(d time.Duration, n int) time.Duration {
+	if d <= 0 || n <= 0 {
+		return 0
+	}
+	if d > maxDuration/time.Duration(n) {
+		return maxDuration
+	}
+	return d * time.Duration(n)
+}
+
+// addSaturating returns a+b for non-negative a and b, saturating at maxDuration.
+func addSaturating(a, b time.Duration) time.Duration {
+	if a > maxDuration-b {
+		return maxDuration
+	}
+	return a + b
 }
 
 // MarkerState is what a single look at a health marker found: STALE

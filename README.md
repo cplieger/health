@@ -96,13 +96,20 @@ unhealthy and Docker restarts the container:
 
 ```go
 if len(os.Args) > 1 && os.Args[1] == "health" {
-    health.RunProbe(health.DefaultPath, health.WithMaxAge(3*interval))
+    health.RunProbe(health.DefaultPath, health.WithMaxAge(
+        health.Lease{Interval: interval, Cycles: 3}.Duration()))
 }
 ```
 
 Every `Set(true)` refreshes the marker's mtime, so the writing side needs no
 changes. Pick a max-age comfortably above one cycle interval plus the worst
-normal cycle duration (3× the interval is a sane default).
+normal cycle duration (3× the interval is a sane default). Build it with
+`Lease` rather than multiplying inline: a `time.Duration` is an int64 of
+nanoseconds, so `3*interval` on an operator-supplied interval above roughly
+854015h wraps to a negative value, which `WithMaxAge` reads as the deliberate
+disable, and the probe then calls a wedged loop healthy for as long as the
+marker exists. `Lease.Duration` saturates at the largest `time.Duration`
+instead, and a non-positive `Interval` still means disabled.
 
 Arm it only where the resident process runs its own bounded work cycle at a
 known cadence, so a stale marker means a wedged loop that a restart fixes. Do
@@ -220,6 +227,7 @@ Response (503 Service Unavailable):
 - `RunProbe(path string, opts ...ProbeOption)`: probe process entry (calls os.Exit)
 - `ProbeCheck(path string, opts ...ProbeOption) int`: testable probe logic (0=healthy or degraded, 1=unhealthy)
 - `ProbeOption` / `WithMaxAge(d time.Duration)`: opt-in freshness deadline for the probe side (marker older than `d` is unhealthy; non-positive `d` disables)
+- `Lease` / `(Lease).Duration()`: the non-wrapping way to build `WithMaxAge`'s argument from an app's own cadence; `Cycles` refresh intervals plus `Attempts` work timeouts, floored, disabled when `Interval` is non-positive
 - `Inspect(path string, opts ...ProbeOption) Freshness`: the same reading, structured and without exiting; for a resident process acting on its OWN marker in-process rather than a subcommand exiting for a healthcheck
 - `Freshness`: one look at a marker (`State`, `Age`, `MaxAge`, `Err`) plus `Healthy() bool` and `Reason() string`
 - `MarkerState` / `MarkerFresh`, `MarkerStale`, `MarkerAbsent`, `MarkerUnreadable`, `MarkerDirUnavailable`: the state vocabulary, with a `String()` for log attributes
