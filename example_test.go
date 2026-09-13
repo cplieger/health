@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/cplieger/health"
 )
@@ -41,4 +42,26 @@ func ExampleProbeCheck() {
 	// Output:
 	// code: 1
 	// code: 0
+}
+
+// ExampleLease_Duration builds the argument for WithMaxAge from an app's own
+// cadence: tolerate two missed refreshes plus one worst-case run.
+func ExampleLease_Duration() {
+	lease := health.Lease{
+		Interval: 6 * time.Hour, Cycles: 2,
+		Timeout: time.Hour, Attempts: 1,
+	}
+	fmt.Println(lease.Duration())
+
+	// An operator cadence large enough to overflow the same arithmetic
+	// written inline saturates instead of wrapping negative.
+	absurd := health.Lease{Interval: 900000 * time.Hour, Cycles: 3}
+	fmt.Println(absurd.Duration() > 0, 3*absurd.Interval > 0)
+
+	// A non-positive Interval is the documented disable, as is the zero value.
+	fmt.Println(health.Lease{Cycles: 3, Floor: time.Hour}.Duration())
+	// Output:
+	// 13h0m0s
+	// true false
+	// 0s
 }
