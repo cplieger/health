@@ -1,8 +1,6 @@
 # health
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/cplieger/health.svg)](https://pkg.go.dev/github.com/cplieger/health)
-[![Go version](https://img.shields.io/github/go-mod/go-version/cplieger/health)](https://github.com/cplieger/health/blob/main/go.mod)
-[![Mutation](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/cplieger/health/badges/mutation.json)](https://github.com/cplieger/health/issues?q=label%3Agremlins-tracker)
+[![Go Reference](https://pkg.go.dev/badge/github.com/cplieger/health.svg)](https://pkg.go.dev/github.com/cplieger/health) [![Go version](https://img.shields.io/github/go-mod/go-version/cplieger/health)](https://github.com/cplieger/health/blob/main/go.mod) [![Mutation](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/cplieger/health/badges/mutation.json)](https://github.com/cplieger/health/issues?q=label%3Agremlins-tracker)
 
 > Healthchecks for distroless containers: file marker + HTTP probe
 
