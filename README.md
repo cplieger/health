@@ -2,149 +2,58 @@
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/cplieger/health.svg)](https://pkg.go.dev/github.com/cplieger/health) [![Go version](https://img.shields.io/github/go-mod/go-version/cplieger/health)](https://github.com/cplieger/health/blob/main/go.mod) [![Mutation](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/cplieger/health/badges/mutation.json)](https://github.com/cplieger/health/issues?q=label%3Agremlins-tracker)
 
-> Healthchecks for distroless containers: file marker + HTTP probe
+health gives distroless Go services a Docker healthcheck with no shell, curl or wget. Your service writes a marker file, and the same binary checks it when Docker asks.
 
-A standalone Go library for Docker healthchecks in containers that lack a shell. Two modes:
+It replaces the `curl` call a `HEALTHCHECK` usually runs. For an image that wraps a server you did not write, a second module ships a static binary that checks an HTTP endpoint instead. Both modules use only the standard library at run time, need Go 1.27.1 or later and are licensed under Apache-2.0. Both are v1 modules that follow semantic versioning.
 
-- **File marker:** for containers whose main process is your own Go binary. The running process touches or removes a marker file; the probe process (re-invoked binary) stats it. Handles degraded mode (read-only filesystem) gracefully.
-- **HTTP probe:** for containers wrapping a third-party server (Caddy, an upstream daemon) that cannot cooperate with a marker but already exposes an HTTP endpoint whose reachability is the health signal. Ships as its own nested module, [`github.com/cplieger/health/probe`](probe/), with `probe/cmd/probe` as the ready-made static binary to bake into the image.
+## Why use it
 
-When you own the main process, prefer the file marker: `Set(bool)` expresses application state a network GET cannot. Standard library only (test dependency: pgregory.net/rapid).
+health is built for container images with no shell, whether the main process is your own Go service or a server you did not write.
 
-The two modules version and release independently: `vX.Y.Z` tags for the marker library, `probe/vX.Y.Z` for the probe.
+- Your code decides what healthy means. `Set(true)` writes the marker and `Set(false)` removes it.
+- When `/tmp` cannot be written, the check still reports healthy and the service logs one warning with the fix. A read-only filesystem never marks a working container unhealthy.
+- An optional deadline fails the check when a work loop stops refreshing the marker.
+- `Latch` keeps the container unhealthy once shutdown begins, even when late work succeeds.
+- The `probe` binary passes only when every URL answers 2xx within one shared timeout, and it writes each failure to stderr.
+
+Consider [alexliesenfeld/health](https://github.com/alexliesenfeld/health) if you want an HTTP health endpoint that runs checks against your database and other dependencies, with caching, periodic checks and a status for each component.
 
 ## Install
 
-Go: `go get github.com/cplieger/health@latest`
-
-HTTP probe module: `go get github.com/cplieger/health/probe@latest`
+```sh
+go get github.com/cplieger/health@latest
+go get github.com/cplieger/health/probe@latest
+```
 
 ## Usage
 
-### Main process
+Handle the `health` subcommand first, then mark the service healthy once it is ready:
 
 ```go
-package main
-
-import "github.com/cplieger/health"
-
 func main() {
+    if len(os.Args) > 1 && os.Args[1] == "health" {
+        health.RunProbe(health.DefaultPath) // exits 0 or 1
+    }
+
     m := health.NewMarker(health.DefaultPath)
     defer m.Cleanup()
-
-    // Mark healthy once ready
     m.Set(true)
 
-    // ... run application ...
+    // ... run the service, and call m.Set(false) when it cannot do its work ...
 }
 ```
 
-### Shutdown health precedence
+Point the image's healthcheck at the same binary:
 
-A resident daemon can prevent late successful work from masking shutdown. Wrap
-its marker in a `Latch`, send ordinary health decisions through `Set`, and call
-`BeginDrain` before waiting for in-flight work:
-
-```go
-marker := health.NewMarker(health.DefaultPath)
-defer marker.Cleanup()
-
-state := health.NewLatch(marker)
-state.Set(true)
-
-// Stop admitting work, then make health monotonic toward unhealthy.
-state.BeginDrain()
-
-// This is dropped after BeginDrain; state.Set(false) would still land.
-state.Set(runSucceeded)
+```dockerfile
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD ["/app", "health"]
 ```
 
-The latch owns only write precedence. The app still decides whether a result
-means healthy, unhealthy, or no write at all.
+`RunProbe` exits 0 while the marker at `/tmp/.healthy` exists. It exits 1 when the marker is missing from a writable `/tmp`, and writes the reason to stderr.
 
-### Health subcommand (probe process)
+If a separate `docker exec` process writes the marker, run it as the main process's UID and use `SetChecked` so a failed write fails the job.
 
-```go
-if len(os.Args) > 1 && os.Args[1] == "health" {
-    health.RunProbe(health.DefaultPath)
-}
-```
-
-> **External triggers and file ownership:** the marker belongs to whoever
-> created it. If a separate `docker exec` process updates it (a job scheduler
-> invoking your binary's `run`/`sync` subcommand), run that exec as the same
-> UID as the container's main process, for example the `user` field of an Ofelia
-> job-exec block. A mismatched exec user fails the marker write with
-> permission denied; under `Set` the health signal is lost silently. When an
-> external scheduler alerts on the subcommand's exit code, call `SetChecked`
-> and propagate the returned error into the exit code, so the scheduler's
-> job fails instead of losing the heartbeat invisibly.
-
-### Freshness deadline (opt-in)
-
-By default the probe checks existence only, and staleness stays owned by
-Docker's `--interval`. That check has a blind spot: once `Set(true)` has run,
-a deadlocked process keeps passing every probe. An app whose resident loop
-already calls `Set(true)` once per work cycle can arm a deadline, turning
-those calls into heartbeats; a marker older than the deadline probes
-unhealthy and Docker restarts the container:
-
-```go
-if len(os.Args) > 1 && os.Args[1] == "health" {
-    health.RunProbe(health.DefaultPath, health.WithMaxAge(
-        health.Lease{Interval: interval, Cycles: 3}.Duration()))
-}
-```
-
-Every `Set(true)` refreshes the marker's mtime, so the writing side needs no
-changes. Pick a max-age comfortably above one cycle interval plus the worst
-normal cycle duration (3× the interval is a sane default). Build it with
-`Lease` rather than multiplying inline: a `time.Duration` is an int64 of
-nanoseconds, so `3*interval` on an operator-supplied interval above roughly
-854015h wraps to a negative value, which `WithMaxAge` reads as the deliberate
-disable, and the probe then calls a wedged loop healthy for as long as the
-marker exists. `Lease.Duration` saturates at the largest `time.Duration`
-instead, and a non-positive `Interval` still means disabled.
-
-Arm it only where the resident process runs its own bounded work cycle at a
-known cadence, so a stale marker means a wedged loop that a restart fixes. Do
-NOT arm it for externally-triggered apps (a separate `docker exec` writes the
-marker): an idle resident between triggers is healthy, and restarting it
-cannot fix a trigger that stopped firing. `CheckHealthy()`, `Healthy()`, and
-`Handler` stay existence-based regardless.
-
-### Acting on freshness in-process (`Inspect`)
-
-`RunProbe` and `ProbeCheck` answer for a healthcheck: exit 0 or 1. A resident
-process that wants to act on its OWN marker (a daemon watching its work loop
-for a wedge, rather than a subcommand exiting for Docker) needs two things the
-exit code cannot carry: the marker's age, to report it, and the difference
-between STALE and ABSENT, because they call for opposite responses. A stale
-marker means the loop is wedged and a restart may clear it; an absent one means
-nothing has written it yet (a cold start, a wiped volume) and a restart changes
-nothing.
-
-```go
-switch f := health.Inspect(path, health.WithMaxAge(lease)); f.State {
-case health.MarkerStale:
-    log.Warn("work loop overdue", "age", f.Age, "lease", f.MaxAge)
-    // act: nudge, restart, or surface it
-case health.MarkerAbsent, health.MarkerUnreadable, health.MarkerDirUnavailable:
-    // not evidence of a wedge; the probe already owns these
-}
-```
-
-`Inspect` is the single implementation of the reading (`RunProbe` and
-`ProbeCheck` are presentations of it), so a process acting on `Inspect` and a
-container healthcheck reading the exit code cannot reach different verdicts.
-Existence-only remains the default: without `WithMaxAge`, a present marker is
-always `MarkerFresh`.
-
-### HTTP probe (wrapped third-party servers)
-
-For images whose main process is not your code (so nothing can touch a
-marker), bake the standalone probe binary into the image and point it at
-the endpoint(s) that define liveness:
+For an image whose main process is a server you did not write, point the `probe` binary at an endpoint. No prebuilt binary is published, so build it with `go install` in a builder stage:
 
 ```dockerfile
 FROM golang:1.27-alpine AS probe
@@ -156,106 +65,65 @@ HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
     CMD ["/probe", "-timeout", "4s", "http://127.0.0.1:2019/config/"]
 ```
 
-Keep the probe's `-timeout` strictly below Docker's `--timeout`: the probe
-needs the margin to expire its budget, write the per-URL failure line to
-stderr, and exit 1 before Docker force-kills the check (a killed check
-still counts as failed, but the diagnostic is lost).
-
-Multiple URLs probe multiple surfaces in one run (all must answer 2xx
-within one shared `-timeout` budget, default 5s):
-
-```dockerfile
-CMD ["/probe", "-timeout", "4s", "http://127.0.0.1:80/health", "http://127.0.0.1:2019/config/"]
-```
-
-Exit codes: 0 all healthy, 1 any probe failed (each failure written to
-stderr, visible in `docker inspect`), 2 usage error.
-
-### Optional HTTP handler (K8s HTTP probes)
-
-For containers that also expose an HTTP endpoint, the library provides an
-optional `Handler` that emits JSON status, compatible with K8s HTTP liveness
-probes and mirroring the response shape of hellofresh/health-go:
-
-```go
-import "github.com/cplieger/health"
-
-m := health.NewMarker(health.DefaultPath)
-http.Handle("/healthz", health.Handler(m))
-```
-
-Response (200 OK):
-
-```json
-{"status":"OK","timestamp":"2025-01-01T00:00:00Z"}
-```
-
-Response (503 Service Unavailable):
-
-```json
-{"status":"Unavailable","timestamp":"2025-01-01T00:00:00Z"}
-```
-
-> **Degraded mode caveat:** when the marker directory is unwritable (for example
-> `read_only: true` with no `/tmp` tmpfs), `Handler` reports 503, intentionally
-> diverging from the `health` subcommand probe (`ProbeCheck`), which reports
-> healthy to avoid a Docker restart loop. Do not wire `Handler` as the _sole_
-> liveness probe on a service that may run read-only without a `/tmp` tmpfs, or
-> it will restart-loop a container that is actually alive.
+Keep the probe's `-timeout` below Docker's `--timeout`, so the probe can write its failure line before Docker stops the check. The [file marker](docs/file-marker.md) and [HTTP probe](docs/http-probe.md) pages cover shutdown, external triggers and several URLs.
 
 ## API
 
-- `DefaultPath`: default marker path (`/tmp/.healthy`)
-- `Signal`: interface with `Healthy() bool`
-- `Marker`: main type; implements `Signal`
-- `NewMarker(path string) *Marker`: constructor (probes dir writability)
-- `(*Marker).Set(ok bool)`: touch or remove marker (failures logged and swallowed)
-- `(*Marker).SetChecked(ok bool) error`: `Set` with the filesystem outcome reported; deliberately nil in degraded mode, so a compose misconfiguration never becomes an alert loop
-- `(*Marker).Cleanup()`: remove marker on shutdown
-- `(*Marker).CheckHealthy() bool`: stat-based liveness check, one `os.Stat` per call. `(*Marker).Healthy() bool` delegates to it and satisfies `Signal`
-- `Latch`: shutdown-precedence wrapper over `Marker`; after `BeginDrain`, healthy writes are dropped and unhealthy writes still land
-- `NewLatch(marker *Marker) *Latch`: constructs a latch; keep the marker to call `Cleanup`
-- `(*Latch).Set(healthy bool)`: writes through the marker unless drain has latched a healthy result out
-- `(*Latch).BeginDrain()`: marks unhealthy immediately and makes later health monotonic toward unhealthy
-- `Status`: JSON response struct emitted by `Handler` (fields: `Status`, `Timestamp`)
-- `Handler(s Signal) http.Handler`: optional JSON health endpoint
-- `RunProbe(path string, opts ...ProbeOption)`: probe process entry (calls os.Exit)
-- `ProbeCheck(path string, opts ...ProbeOption) int`: testable probe logic (0=healthy or degraded, 1=unhealthy)
-- `ProbeOption` / `WithMaxAge(d time.Duration)`: opt-in freshness deadline for the probe side (marker older than `d` is unhealthy; non-positive `d` disables)
-- `Lease` / `(Lease).Duration()`: the non-wrapping way to build `WithMaxAge`'s argument from an app's own cadence; `Cycles` refresh intervals plus `Attempts` work timeouts, floored, disabled when `Interval` is non-positive
-- `Inspect(path string, opts ...ProbeOption) Freshness`: the same reading, structured and without exiting; for a resident process acting on its OWN marker in-process rather than a subcommand exiting for a healthcheck
-- `Freshness`: one look at a marker (`State`, `Age`, `MaxAge`, `Err`) plus `Healthy() bool` and `Reason() string`
-- `MarkerState` / `MarkerFresh`, `MarkerStale`, `MarkerAbsent`, `MarkerUnreadable`, `MarkerDirUnavailable`: the state vocabulary, with a `String()` for log attributes
+- Marker: `NewMarker`, `DefaultPath`, and the `Set`, `SetChecked`, `Cleanup`, `CheckHealthy` and `Healthy` methods, with the `Signal` interface.
+- Probe side: `RunProbe`, `ProbeCheck` and the `WithMaxAge` option, with `Lease` to build its deadline.
+- Reading a marker in-process: `Inspect`, `Freshness` and the `MarkerState` values.
+- Shutdown: `Latch`, `NewLatch`, and the `Set` and `BeginDrain` methods.
+- HTTP endpoint: `Handler` and its `Status` JSON body.
+- HTTP probe module: `probe.URL`, `probe.Check`, `probe.Run`, `probe.DefaultTimeout` and the `probe/cmd/probe` binary.
 
-In the `github.com/cplieger/health/probe` module:
+The full reference is on pkg.go.dev for [health](https://pkg.go.dev/github.com/cplieger/health) and [health/probe](https://pkg.go.dev/github.com/cplieger/health/probe). Its `Example` functions are runnable, and `go test` keeps them true.
 
-- `probe.DefaultTimeout`: default shared budget for one HTTP probe run (5s)
-- `probe.URL(ctx context.Context, url string) error`: single HTTP liveness GET; nil on a 2xx final response
-- `probe.Check(w io.Writer, timeout time.Duration, urls ...string) int`: testable multi-URL probe (0=all healthy, 1 otherwise; probes all URLs, one failure line each; zero URLs is unhealthy)
-- `probe.Run(timeout time.Duration, urls ...string)`: probe process entry (calls os.Exit); `probe/cmd/probe` is the ready-made binary around it
+## Degraded mode keeps the container healthy
 
-## Unsupported by Design
+`NewMarker` checks that the marker's folder is writable. When it is not, for example under compose's `read_only: true` with no tmpfs at `/tmp`, the marker enters degraded mode. `Set` and `Cleanup` then do nothing, `SetChecked` returns nil, and the service logs one warning that names the tmpfs mount to add.
 
-The following features are deliberately excluded. This library complements
-HTTP-based health libraries (for example hellofresh/health-go, alexliesenfeld/health)
-rather than competing with them: those are server-side check frameworks,
-while this library's HTTP probe is a client-side liveness GET for the
-HEALTHCHECK side of the same connection.
+In degraded mode the `health` subcommand reports healthy, because the service still works and only its health reporting is broken. `Handler` and `CheckHealthy` report unhealthy, because no marker was ever written. So do not use `Handler` as the only liveness probe of a service that may run read-only without a tmpfs at `/tmp`. A platform that restarts on a failed probe, such as Kubernetes, would restart a working container.
 
-| Feature                             | Rationale                                                                                                                                                 |
-| ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Registered dependency checks        | `Set(bool)` is the aggregation point; the app owns the decision logic. A check registry is a fundamentally different abstraction (~150 LOC, specialized). |
-| Liveness/readiness split            | Docker Compose has one HEALTHCHECK. For K8s, create two `Marker` instances with different paths.                                                          |
-| Graceful shutdown / context.Context | `Cleanup()` is the shutdown action. No background goroutines exist to cancel.                                                                             |
-| Status-change callbacks             | State transitions are logged via slog. Wrap `Set()` for custom callbacks.                                                                                 |
-| Default staleness checking          | Existence-only remains the default; Docker's `--interval` owns cadence. Freshness is opt-in per app via `WithMaxAge` (see above), never global.           |
-| Prometheus metrics                  | Trivially added by consumers: `prometheus.NewGaugeFunc(opts, func() float64 { ... })`.                                                                    |
-| Custom marker content               | The pattern's elegance is `os.Stat`: no parsing, no format versioning.                                                                                    |
+To run read-only with a working signal, mount a tmpfs at `/tmp`:
+
+```yaml
+read_only: true
+tmpfs:
+  - /tmp:size=1m,mode=1777,noexec,nosuid,nodev
+```
+
+## The freshness deadline is opt-in
+
+By default the check passes for as long as the marker exists, and Docker's `--interval` decides how often it runs. `WithMaxAge` adds a deadline, and a marker older than it fails the check. Every `Set(true)` refreshes the marker's age, so a service that calls it once per work cycle needs no other change.
+
+Arm it only for a service that runs its own work loop at a known interval. Leave it off for a service that a separate `docker exec` triggers, because that service is healthy while it waits between triggers. Build the deadline with `Lease`, which saturates instead of overflowing. The [freshness deadline](docs/freshness.md) page has the details and `Inspect`.
+
+## Unsupported by design
+
+health leaves these out on purpose. The [non-goals](docs/non-goals.md) page gives the reason for each.
+
+- Registered dependency checks. `Set(bool)` is where your code combines them.
+- Separate liveness and readiness signals. Use two markers with different paths.
+- A `context.Context` or a shutdown hook. `Cleanup` is the shutdown action.
+- Status-change callbacks. Wrap `Set` to add your own.
+- A staleness check by default. The deadline is opt-in for each service.
+- Prometheus metrics. A gauge over `CheckHealthy` adds one.
+- Content inside the marker file. The check is one `os.Stat`.
+
+## Documentation
+
+- [The file marker](docs/file-marker.md) covers wiring, degraded mode, external triggers, shutdown and the HTTP handler.
+- [Freshness deadline](docs/freshness.md) covers when to arm `WithMaxAge`, building it with `Lease`, and reading a marker in-process with `Inspect`.
+- [HTTP probe](docs/http-probe.md) covers the Dockerfile, timeouts, several URLs and exit codes.
+- [Non-goals](docs/non-goals.md) lists what the library leaves out and why.
+
+## Credits
+
+`Handler`'s JSON body uses the `status` and `timestamp` fields and the `OK` and `Unavailable` values of the `/status` response in [hellofresh/health-go](https://github.com/hellofresh/health-go).
 
 ## Contributing
 
-Issues and PRs are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the
-conventions and how to run the checks locally.
+Issues and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the conventions and how to run the checks locally.
 
 ## Disclaimer
 
