@@ -497,7 +497,7 @@ func TestHealthMarker_SetWriteFailure_warnsOncePerStreak(t *testing.T) {
 
 // TestHealthMarker_SetWriteFailure_logsRecoveryAfterStreak verifies that
 // once a write finally succeeds after a failure streak, Set creates the
-// marker and logs a recovery "health state changed" Info.
+// marker and logs both the change to healthy and the recovery, at Info.
 func TestHealthMarker_SetWriteFailure_logsRecoveryAfterStreak(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".healthy")
@@ -524,8 +524,12 @@ func TestHealthMarker_SetWriteFailure_logsRecoveryAfterStreak(t *testing.T) {
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("marker should exist after recovery Set(true): %v", err)
 	}
-	if !strings.Contains(buf.String(), "health state changed") {
-		t.Errorf("want recovery 'health state changed' Info after write succeeds; log:\n%s", buf.String())
+	logged := buf.String()
+	if got := strings.Count(logged, `level=INFO msg="health state changed" healthy=true`); got != 1 {
+		t.Errorf("INFO healthy=true lines = %d, want 1\nlog:\n%s", got, logged)
+	}
+	if got := strings.Count(logged, `level=INFO msg="health marker write recovered"`); got != 1 {
+		t.Errorf("INFO recovery lines = %d, want 1\nlog:\n%s", got, logged)
 	}
 }
 
@@ -691,18 +695,106 @@ func TestHealthMarker_Set_transitionLoggingSilentOnRepeat(t *testing.T) {
 	m.Set(false) // repeat: silent
 
 	logged := buf.String()
-	if got := strings.Count(logged, `msg="health state changed" healthy=true`); got != 1 {
-		t.Errorf("Set(true) edge-transition logs = %d, want exactly 1\nlog:\n%s", got, logged)
+	if got := strings.Count(logged, `level=INFO msg="health state changed" healthy=true`); got != 1 {
+		t.Errorf("Set(true) edge-transition INFO logs = %d, want exactly 1\nlog:\n%s", got, logged)
 	}
-	if got := strings.Count(logged, `msg="health state changed" healthy=false`); got != 1 {
-		t.Errorf("Set(false) edge-transition logs = %d, want exactly 1\nlog:\n%s", got, logged)
+	if got := strings.Count(logged, `level=WARN msg="health state changed" healthy=false`); got != 1 {
+		t.Errorf("Set(false) edge-transition WARN logs = %d, want exactly 1\nlog:\n%s", got, logged)
+	}
+	if got := strings.Count(logged, `msg="health state changed"`); got != 2 {
+		t.Errorf("health state changed lines = %d, want 2\nlog:\n%s", got, logged)
 	}
 }
 
-// TestHealthMarker_Set_firstSetFalseAnnouncesState pins the `!m.known` term:
-// the first Set call must announce state even though false equals the zero
-// value of m.healthy. A mutant dropping !m.known swallows this log.
-func TestHealthMarker_Set_firstSetFalseAnnouncesState(t *testing.T) {
+// writeExternalMarker writes a marker at path as another process would, and
+// confirms the probe side reads it as healthy.
+func writeExternalMarker(t *testing.T, path string) {
+	t.Helper()
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatalf("write external marker: %v", err)
+	}
+	if code := ProbeCheck(path); code != 0 {
+		t.Fatalf("ProbeCheck on an external marker = %d, want 0", code)
+	}
+}
+
+// TestHealthMarker_Set_inheritedMarkerFalseWarns pins the starting state as
+// the file on disk: a marker another process left reports healthy, so the
+// first Set(false) that removes it is a real change for every observer.
+func TestHealthMarker_Set_inheritedMarkerFalseWarns(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".healthy")
+	writeExternalMarker(t, path)
+	m := NewMarker(path)
+	if m.degraded {
+		t.Skip("parent dir not writable in this environment; skipping")
+	}
+	if !m.CheckHealthy() {
+		t.Fatal("CheckHealthy on an inherited marker = false, want true")
+	}
+
+	buf := captureLogs(t)
+
+	m.Set(false)
+
+	logged := buf.String()
+	if m.CheckHealthy() {
+		t.Error("CheckHealthy after Set(false) = true, want false")
+	}
+	if got := strings.Count(logged, `level=WARN msg="health state changed" healthy=false`); got != 1 {
+		t.Errorf("WARN healthy=false lines = %d, want 1\nlog:\n%s", got, logged)
+	}
+}
+
+// TestHealthMarker_Set_inheritedMarkerTrueIsSilent pins the shared-marker
+// pattern: a separate process writing healthy over a marker that already
+// reports healthy changes nothing, so it logs no state change.
+func TestHealthMarker_Set_inheritedMarkerTrueIsSilent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".healthy")
+	writeExternalMarker(t, path)
+	m := NewMarker(path)
+	if m.degraded {
+		t.Skip("parent dir not writable in this environment; skipping")
+	}
+
+	buf := captureLogs(t)
+
+	m.Set(true)
+
+	logged := buf.String()
+	if got := strings.Count(logged, `msg="health state changed"`); got != 0 {
+		t.Errorf("health state changed lines = %d, want 0\nlog:\n%s", got, logged)
+	}
+}
+
+// TestHealthMarker_Cleanup_thenSetTrueLogsChange pins the boot that clears an
+// inherited marker: Cleanup removes it without a log line, and the later
+// Set(true) logs the change to healthy, as a clean boot does.
+func TestHealthMarker_Cleanup_thenSetTrueLogsChange(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".healthy")
+	writeExternalMarker(t, path)
+	m := NewMarker(path)
+	if m.degraded {
+		t.Skip("parent dir not writable in this environment; skipping")
+	}
+
+	buf := captureLogs(t)
+
+	m.Cleanup()
+	m.Set(true)
+
+	logged := buf.String()
+	if got := strings.Count(logged, `level=INFO msg="health state changed" healthy=true`); got != 1 {
+		t.Errorf("INFO healthy=true lines = %d, want 1\nlog:\n%s", got, logged)
+	}
+	if strings.Contains(logged, "level=WARN") {
+		t.Errorf("Cleanup then Set(true) logged a WARN\nlog:\n%s", logged)
+	}
+}
+
+// TestHealthMarker_Set_firstSetFalseIsSilent pins the initial state: with no
+// marker on disk a new marker is already unhealthy, so a first Set(false)
+// changes nothing and logs nothing.
+func TestHealthMarker_Set_firstSetFalseIsSilent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".healthy")
 	m := NewMarker(path)
 	if m.degraded {
@@ -711,12 +803,151 @@ func TestHealthMarker_Set_firstSetFalseAnnouncesState(t *testing.T) {
 
 	buf := captureLogs(t)
 
-	m.Set(false) // first call on a fresh marker: announces initial state
-	m.Set(false) // repeat: silent
+	m.Set(false)
+	m.Set(false)
 
 	logged := buf.String()
-	if got := strings.Count(logged, `msg="health state changed" healthy=false`); got != 1 {
-		t.Errorf("first Set(false) announce logs = %d, want exactly 1\nlog:\n%s", got, logged)
+	if got := strings.Count(logged, `msg="health state changed"`); got != 0 {
+		t.Errorf("health state changed lines after Set(false) on a new marker = %d, want 0\nlog:\n%s", got, logged)
+	}
+	if strings.Contains(logged, "level=WARN") {
+		t.Errorf("Set(false) on a new marker logged a WARN\nlog:\n%s", logged)
+	}
+}
+
+// TestHealthMarker_Set_bootSequenceWarnsNothing pins the distroless boot
+// pattern, Set(false) at startup then Set(true) once ready: one Info line for
+// the change to healthy, and no WARN.
+func TestHealthMarker_Set_bootSequenceWarnsNothing(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".healthy")
+	m := NewMarker(path)
+	if m.degraded {
+		t.Skip("parent dir not writable in this environment; skipping")
+	}
+
+	buf := captureLogs(t)
+
+	m.Set(false)
+	m.Set(true)
+
+	logged := buf.String()
+	if got := strings.Count(logged, `level=INFO msg="health state changed" healthy=true`); got != 1 {
+		t.Errorf("INFO healthy=true lines = %d, want 1\nlog:\n%s", got, logged)
+	}
+	if got := strings.Count(logged, `msg="health state changed"`); got != 1 {
+		t.Errorf("health state changed lines = %d, want 1\nlog:\n%s", got, logged)
+	}
+	if strings.Contains(logged, "level=WARN") {
+		t.Errorf("boot sequence logged a WARN\nlog:\n%s", logged)
+	}
+}
+
+// TestHealthMarker_Set_externallyCreatedMarkerFalseWarns pins the baseline as
+// the file at the call: a separate process creates the marker after NewMarker,
+// so the probe reports healthy, and the Set(false) removing it is a real change.
+func TestHealthMarker_Set_externallyCreatedMarkerFalseWarns(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".healthy")
+	m := NewMarker(path)
+	if m.degraded {
+		t.Skip("parent dir not writable in this environment; skipping")
+	}
+	writeExternalMarker(t, path)
+
+	buf := captureLogs(t)
+
+	m.Set(false)
+
+	logged := buf.String()
+	if code := ProbeCheck(path); code != 1 {
+		t.Errorf("ProbeCheck after Set(false) = %d, want 1", code)
+	}
+	if got := strings.Count(logged, `level=WARN msg="health state changed" healthy=false`); got != 1 {
+		t.Errorf("WARN healthy=false lines = %d, want 1\nlog:\n%s", got, logged)
+	}
+	if got := strings.Count(logged, `msg="health state changed"`); got != 1 {
+		t.Errorf("health state changed lines = %d, want 1\nlog:\n%s", got, logged)
+	}
+}
+
+// TestHealthMarker_Set_externallyRemovedMarkerTrueLogsChange is the reverse:
+// a separate process removes the marker NewMarker found, so the probe reports
+// unhealthy, and the Set(true) recreating it is a real change to healthy.
+func TestHealthMarker_Set_externallyRemovedMarkerTrueLogsChange(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".healthy")
+	writeExternalMarker(t, path)
+	m := NewMarker(path)
+	if m.degraded {
+		t.Skip("parent dir not writable in this environment; skipping")
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatalf("remove marker externally: %v", err)
+	}
+	if code := ProbeCheck(path); code != 1 {
+		t.Fatalf("ProbeCheck after external remove = %d, want 1", code)
+	}
+
+	buf := captureLogs(t)
+
+	m.Set(true)
+
+	logged := buf.String()
+	if got := strings.Count(logged, `level=INFO msg="health state changed" healthy=true`); got != 1 {
+		t.Errorf("INFO healthy=true lines = %d, want 1\nlog:\n%s", got, logged)
+	}
+	if got := strings.Count(logged, `msg="health state changed"`); got != 1 {
+		t.Errorf("health state changed lines = %d, want 1\nlog:\n%s", got, logged)
+	}
+}
+
+// TestHealthMarker_SetChecked_unreadableMarkerIsAFailure pins a marker whose
+// state cannot be read (a symlink loop: the probe reports a stat failure, not
+// absence): SetChecked fails, logs the stat error once and no state change,
+// and leaves the marker as it is; once it is readable the next write recovers.
+func TestHealthMarker_SetChecked_unreadableMarkerIsAFailure(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".healthy")
+	m := NewMarker(path)
+	if m.degraded {
+		t.Skip("parent dir not writable in this environment; skipping")
+	}
+	if err := os.Symlink(path, path); err != nil {
+		t.Fatalf("symlink loop: %v", err)
+	}
+	if got := Inspect(path).State; got != MarkerUnreadable {
+		t.Fatalf("Inspect on a symlink loop = %v, want unreadable", got)
+	}
+
+	buf := captureLogs(t)
+
+	errTrue := m.SetChecked(true)
+	errFalse := m.SetChecked(false)
+
+	logged := buf.String()
+	if errTrue == nil || errFalse == nil {
+		t.Errorf("SetChecked on an unreadable marker = (%v, %v), want two errors", errTrue, errFalse)
+	}
+	if _, err := os.Lstat(path); err != nil {
+		t.Errorf("unreadable marker should be left in place: %v", err)
+	}
+	if got := strings.Count(logged, `level=WARN msg="failed to stat health marker"`); got != 1 {
+		t.Errorf("WARN stat-failure lines = %d, want 1\nlog:\n%s", got, logged)
+	}
+	if got := strings.Count(logged, `msg="health state changed"`); got != 0 {
+		t.Errorf("health state changed lines on an unreadable marker = %d, want 0\nlog:\n%s", got, logged)
+	}
+
+	if err := os.Remove(path); err != nil {
+		t.Fatalf("remove symlink loop: %v", err)
+	}
+	buf.Reset()
+	if err := m.SetChecked(true); err != nil {
+		t.Fatalf("SetChecked(true) once readable: %v", err)
+	}
+	logged = buf.String()
+	if got := strings.Count(logged, `level=INFO msg="health state changed" healthy=true`); got != 1 {
+		t.Errorf("INFO healthy=true lines after recovery = %d, want 1\nlog:\n%s", got, logged)
+	}
+	if got := strings.Count(logged, `level=INFO msg="health marker write recovered"`); got != 1 {
+		t.Errorf("INFO recovery lines = %d, want 1\nlog:\n%s", got, logged)
 	}
 }
 
@@ -748,12 +979,12 @@ func TestNewMarker_degraded_logsHintOnce(t *testing.T) {
 	}
 }
 
-// TestHealthMarker_Set_recoveryLogsOnFalseBranchAfterStreak pins the
-// `recovered` term on the Set(false) branch (the Set(true) twin is
-// TestHealthMarker_SetWriteFailure_logsRecoveryAfterStreak). The sequence
-// drives known=true, healthy=false, failed=true, so the final successful
-// Set(false) has changed=false and logs only via recovered.
-func TestHealthMarker_Set_recoveryLogsOnFalseBranchAfterStreak(t *testing.T) {
+// TestHealthMarker_Set_recoveryOnFalseBranchIsNotAStateChange pins the
+// Set(false) recovery (the Set(true) twin is
+// TestHealthMarker_SetWriteFailure_logsRecoveryAfterStreak): the probe reads
+// the marker as absent throughout, so the successful write logs one Info
+// recovery line and no state change.
+func TestHealthMarker_Set_recoveryOnFalseBranchIsNotAStateChange(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".healthy")
 
@@ -762,22 +993,33 @@ func TestHealthMarker_Set_recoveryLogsOnFalseBranchAfterStreak(t *testing.T) {
 		t.Skip("parent dir not writable in this environment; skipping")
 	}
 
-	m.Set(false) // known=true, healthy=false via a no-op remove
+	m.Set(false)
 
-	// An empty directory: the next Set(true) fails (os.Create on a dir
-	// errors) but a later os.Remove of the empty dir still succeeds.
-	if err := os.Mkdir(path, 0o755); err != nil {
-		t.Fatalf("mkdir marker-as-dir: %v", err)
+	// A dangling symlink into a missing directory: the probe reads it as
+	// absent, Set(true) fails to create its target, and removing it succeeds.
+	if err := os.Symlink(filepath.Join(dir, "missing", "marker"), path); err != nil {
+		t.Fatalf("dangling symlink: %v", err)
 	}
-	m.Set(true) // fails: flags failed=true, healthy stays false
+	if got := Inspect(path).State; got != MarkerAbsent {
+		t.Fatalf("Inspect on a dangling symlink = %v, want absent", got)
+	}
+	if err := m.SetChecked(true); err == nil {
+		t.Fatal("SetChecked(true) through a dangling symlink = nil, want an error")
+	}
 
 	buf := captureLogs(t)
 
-	m.Set(false) // removes the empty dir; recovery fires via recovered only
+	m.Set(false)
 
 	logged := buf.String()
-	if got := strings.Count(logged, `msg="health state changed" healthy=false`); got != 1 {
-		t.Errorf("recovery WARN on false-branch after streak = %d, want exactly 1\nlog:\n%s", got, logged)
+	if got := strings.Count(logged, `msg="health state changed"`); got != 0 {
+		t.Errorf("health state changed lines on an unchanged state = %d, want 0\nlog:\n%s", got, logged)
+	}
+	if got := strings.Count(logged, `level=INFO msg="health marker write recovered"`); got != 1 {
+		t.Errorf("INFO recovery lines = %d, want 1\nlog:\n%s", got, logged)
+	}
+	if strings.Contains(logged, "level=WARN") {
+		t.Errorf("recovery logged a WARN\nlog:\n%s", logged)
 	}
 }
 

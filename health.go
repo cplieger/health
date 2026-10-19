@@ -54,8 +54,6 @@ type Marker struct {
 	path           string
 	loggedFailSigs []string
 	mu             sync.Mutex
-	known          bool
-	healthy        bool
 	failed         bool
 	degraded       bool
 }
@@ -78,16 +76,16 @@ func NewMarker(path string) *Marker {
 	return m
 }
 
-// Set records the current liveness state and touches or removes the
-// marker accordingly. Edge transitions (true<->false) are logged; repeated
-// calls with the same value are silent. Safe to call from any goroutine.
-// In degraded mode Set is a no-op. A filesystem failure is logged and
-// swallowed; use SetChecked to observe it programmatically.
+// Set touches or removes the marker for ok, from any goroutine. It logs a
+// change from the file as it stands at the call (no file is unhealthy): Info
+// when healthy, Warn when not, nothing when the file already shows ok. A
+// filesystem failure is logged and swallowed (see SetChecked), and the next
+// successful write logs one Info. In degraded mode Set is a no-op.
 func (m *Marker) Set(ok bool) { _ = m.SetChecked(ok) }
 
 // SetChecked is Set with the filesystem outcome reported: it returns nil
-// when the marker now reflects ok, and the underlying error when the
-// touch or remove failed (the same failure Set logs and swallows, so no
+// when the marker now reflects ok, and the underlying error when reading,
+// touching or removing it failed (the failure Set logs and swallows, so no
 // extra log line is emitted). It exists for callers whose own success
 // contract includes the marker write — e.g. a one-shot scan subcommand
 // whose exit code an external scheduler alerts on, where a silently lost
@@ -100,15 +98,37 @@ func (m *Marker) SetChecked(ok bool) error {
 		return nil
 	}
 
-	changed := !m.known || m.healthy != ok
+	// Read per call: a separate process (a docker exec subcommand) may write
+	// the same file, so a cached state would miss its changes.
+	was, statErr := markerPresent(m.path)
+	if statErr != nil {
+		m.warnFailure("failed to stat health marker", statErr)
+		return statErr
+	}
 	if msg, err := m.applyState(ok); err != nil {
 		m.warnFailure(msg, err)
 		return err
 	}
-	if recovered := m.recordState(ok); changed || recovered {
+	if was != ok {
 		logHealthState(ok)
 	}
+	if m.recordSuccess() {
+		slog.Info("health marker write recovered", "path", m.path, "healthy", ok)
+	}
 	return nil
+}
+
+// markerPresent reads the marker as the existence probe does: present is
+// healthy and absent unhealthy. Any other stat error is returned, never read as absence.
+func markerPresent(path string) (bool, error) {
+	_, err := os.Stat(path)
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	return false, err
 }
 
 // applyState performs the branch-specific filesystem operation for Set:
@@ -430,12 +450,11 @@ func (m *Marker) warnFailure(msg string, err error) {
 	m.failed = true
 }
 
-// recordState records a successfully applied liveness value and
-// clears the failed flag, returning whether this call recovered
-// from a prior failure streak. Caller holds m.mu.
-func (m *Marker) recordState(ok bool) bool {
+// recordSuccess ends a failure streak after a successful write, returning
+// whether one was open. Caller holds m.mu.
+func (m *Marker) recordSuccess() bool {
 	recovered := m.failed
-	m.known, m.healthy, m.failed = true, ok, false
+	m.failed = false
 	m.loggedFailSigs = m.loggedFailSigs[:0]
 	return recovered
 }
