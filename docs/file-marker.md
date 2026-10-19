@@ -24,9 +24,9 @@ func main() {
 
 `RunProbe` exits 0 when the marker exists. It exits 1 when the marker is absent from a writable folder, or when a stat of the marker fails for another reason, and it writes one line to stderr naming the cause. `ProbeCheck` returns the same 0 or 1 without exiting, for tests.
 
-`Set` is safe to call from any goroutine. It logs a change of state, at Info level for healthy and at Warn level for unhealthy, and stays silent when the value repeats. It logs through `slog.Default()`, so call `slog.SetDefault` in `main` before `NewMarker`.
+`Set` is safe to call from any goroutine. Each call compares the value with the marker file as it stands, the state the probe reads without `WithMaxAge`: a file is healthy and no file is unhealthy. A change logs at Info level for healthy and at Warn level for unhealthy, and a call that changes nothing stays silent. So a first `Set(false)` at startup with no file logs nothing, and a `Set(false)` that removes a marker another process wrote logs Warn. It logs through `slog.Default()`, so call `slog.SetDefault` in `main` before `NewMarker`.
 
-When the marker cannot be written or removed, `Set` logs the failure once for each distinct error and carries on. `SetChecked` does the same write and returns the error, for a caller that must act on it.
+When the marker cannot be read, written or removed, `Set` logs the failure once for each distinct error and carries on. A marker it cannot read, such as a symlink loop, is left as it is. The first write that succeeds after a failure logs one Info line. `SetChecked` does the same write and returns the error, for a caller that must act on it.
 
 ## Degraded mode
 
