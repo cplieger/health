@@ -1,5 +1,8 @@
 # health
 
+> Moved to [`github.com/cplieger/go/health`](https://github.com/cplieger/go/tree/dev/health), with `probe` as a package in that module.
+> **Archived 2026-11-06. This repository is read-only. The published Go modules stay available.**
+
 [![Go Reference](https://pkg.go.dev/badge/github.com/cplieger/health.svg)](https://pkg.go.dev/github.com/cplieger/health) [![Go version](https://img.shields.io/github/go-mod/go-version/cplieger/health)](https://github.com/cplieger/health/blob/main/go.mod) [![Mutation](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/cplieger/health/badges/mutation.json)](https://github.com/cplieger/health/issues?q=label%3Agremlins-tracker)
 
 health gives distroless Go services a Docker healthcheck with no shell, curl or wget. Your service writes a marker file, and the same binary checks it when Docker asks.
